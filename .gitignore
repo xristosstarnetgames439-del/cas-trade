@@ -3,6 +3,7 @@ StockMaster.app/
 .env
 .env.local
 .venv/
+apps/api/vendor/
 __pycache__/
 .pytest_cache/
 .ruff_cache/

@@ -73,6 +73,10 @@ start() {
   free_port "$API_PORT"
 
   if [ -n "$uv" ] && [ ! -d "$ROOT/apps/api/.venv" ]; then
+    if [ ! -f "$ROOT/apps/api/vendor/eltdx/pyproject.toml" ]; then
+      info "首次运行：克隆通达信协议库到 apps/api/vendor/eltdx（不提交 git）..."
+      bash "$ROOT/apps/api/scripts/fetch-eltdx.sh" || warn "eltdx 克隆失败，uv sync 可能无法安装竞价依赖"
+    fi
     info "首次运行：安装后端依赖（uv sync，约几分钟）..."
     (cd "$ROOT/apps/api" && "$uv" sync) || warn "后端依赖安装失败，稍后 uv run 会重试"
   fi

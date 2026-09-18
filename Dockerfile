@@ -14,8 +14,13 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /build/api
 
 COPY apps/api/pyproject.toml apps/api/uv.lock ./
+COPY apps/api/scripts/fetch-eltdx.sh ./scripts/fetch-eltdx.sh
 RUN --mount=type=cache,target=/root/.cache/pip \
-    python -m venv /opt/strong-stock-api-venv \
+    apt-get update \
+    && apt-get install -y --no-install-recommends git ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && bash ./scripts/fetch-eltdx.sh \
+    && python -m venv /opt/strong-stock-api-venv \
     && /opt/strong-stock-api-venv/bin/python -m pip install setuptools wheel pydantic-core==2.46.4 uv==0.11.6 \
     && /opt/strong-stock-api-venv/bin/uv export --locked --no-dev --no-emit-project --format requirements-txt -o requirements.txt \
     && /opt/strong-stock-api-venv/bin/python -m pip uninstall -y uv \

@@ -282,7 +282,7 @@ Top3 卡片还会显示：
 | 分钟线 / 竞价 / 盘中观察 | 东方财富 trends2（免费） | 5 日分钟线，历史缺口由通达信（mootdx）补足。 |
 | 涨停/跌停池 | 东方财富 push2ex | 直接涨停池/跌停池。 |
 | 涨停候选池 | 东方财富 / AKShare | 默认从近 20 日涨停池构建候选。 |
-| 集合竞价过程（竞价抢筹） | eltdx 通达信 | PyPI 包 `eltdx==2.0.5`，`uv sync` 自动安装，不必单独 clone。 |
+| 集合竞价过程（竞价抢筹） | eltdx 通达信 | 克隆到 `apps/api/vendor/eltdx`（gitignore，不进 git），再 `uv sync`。 |
 | 板块资金流 | 东方财富行业资金流 | 不可用时 fallback 到估算、TDX 或实时行情行业聚合。 |
 | 市场热力图 | 东方财富热图行情 + 内置行业基准 | 东方财富行情不可用时使用内置 MIT 样本兜底；摘要不可用时用热图节点聚合。 |
 | 行业分类 | 东方财富 / 同花顺参考 / iFinD | 用于行业聚集、板块筛选和归因。 |
@@ -292,26 +292,23 @@ Top3 卡片还会显示：
 
 ### 竞价抢筹用到的数据
 
-竞价抢筹不要求再 clone 一份通达信协议库。产品仓已经声明依赖 `eltdx==2.0.5`，安装 API 依赖时会从 PyPI 下载这个 Python 包（和 `git clone` 源码仓库不是一回事）：
+通达信协议库 **不提交 git**。clone 本仓库后先拉到 `apps/api/vendor/eltdx`，再装依赖（这份目录不会进 cas-trade）：
 
 ```bash
 cd apps/api
+bash scripts/fetch-eltdx.sh
 uv sync
 ```
+
+`fetch-eltdx.sh` 默认克隆 [electkismet/eltdx](https://github.com/electkismet/eltdx) 的 `v2.0.5`。GitHub 不可达时，若本机 `~/trade/eltdx` 已有源码会作为回退。`scripts/stockmaster.sh` 首次启动也会自动执行这一步。
 
 运行时还需要能访问通达信行情主站。本机 Clash 等代理不要阻断该连接。
 
 | 用途 | 来源 | 安装方式 |
 | --- | --- | --- |
-| 09:20–09:25 竞价序列、09:25 撮合 | eltdx / 通达信 | `uv sync` 安装 PyPI 包，无需 clone |
-| 近 20 日涨停候选 | 东方财富涨停池（akshare） | 同样随 `uv sync` 安装 |
+| 09:20–09:25 竞价序列、09:25 撮合 | eltdx / 通达信 | `fetch-eltdx.sh` → `vendor/eltdx`，不进 git |
+| 近 20 日涨停候选 | 东方财富涨停池（akshare） | `uv sync` |
 | 几天几板、断板日补全 | 东方财富日 K | 默认数据源，无需额外安装 |
-
-只有要改通达信协议库本身时，才另外克隆源码，且不要放进本仓库：
-
-```bash
-git clone https://github.com/electkismet/eltdx.git
-```
 
 板块资金流 fallback 顺序：
 
