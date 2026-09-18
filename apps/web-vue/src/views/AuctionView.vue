@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { useRouter } from 'vue-router';
 import { as } from '@/utils/common';
@@ -8,6 +8,7 @@ import {
   createAuctionModelTop3Job,
   createAuctionSnapshotJob,
   getAuctionLatest,
+  getAuctionSnatch,
   getAuctionModelTop3,
   getAuctionModelTop3Job,
   getAuctionSnapshotJob
@@ -17,19 +18,23 @@ import { useJobPolling } from '@/composables/useJobPolling';
 import { useTradeDate } from '@/composables/useTradeDate';
 import { formatWorkbenchNumber } from '@/components/common/workbench/workbench';
 import { auctionModelBucketLabel, auctionModelCacheStatusLabel } from '@/utils/domain/auctionModel';
-import { AUCTION_SORT_OPTIONS, getAuctionLiquidityWarning, getAuctionSortDescription, sortAuctionItems, type AuctionSortMode } from '@/utils/domain/auctionSort';
+import { AUCTION_SORT_OPTIONS, getAuctionLiquidityWarning, getAuctionSortDescription, sortAuctionItems, type AuctionSnatchSortMode, type AuctionSortMode } from '@/utils/domain/auctionSort';
 
 defineOptions({ name: 'AuctionView' });
 
 const router = useRouter();
 const { tradeDate, setTradeDate } = useTradeDate();
 const data = ref<AuctionSnapshotResponse | null>(null);
+const snatchData = ref<AuctionSnapshotResponse | null>(null);
 const model = ref<AuctionModelTop3Response | null>(null);
 const loading = ref(false);
+const snatchLoading = ref(false);
 const error = ref<string | null>(null);
+const snatchError = ref<string | null>(null);
 const modelError = ref<string | null>(null);
 const tier = ref<'all' | AuctionSnapshotItem['tier']>('all');
-const sortMode = ref<AuctionSortMode>('score');
+const sortMode = ref<AuctionSortMode>('open_gap');
+const snatchSort = ref<AuctionSnatchSortMode>('days_boards');
 const industry = ref('all');
 
 const snapshotPolling = useJobPolling<AuctionSnapshotResponse>(createAuctionSnapshotJob, async jobId => {
@@ -42,17 +47,21 @@ const modelPolling = useJobPolling<AuctionModelTop3Response>(
   { intervalMs: 1000 }
 );
 
-const industries = computed(() => ['all', ...new Set((data.value?.items ?? []).map(item => item.industry || '未标注'))]);
+const activeData = computed(() => sortMode.value === 'snatch' ? snatchData.value : data.value);
+const activeError = computed(() => sortMode.value === 'snatch' ? snatchError.value : error.value);
+const activeLoading = computed(() => loading.value || (sortMode.value === 'snatch' && snatchLoading.value));
+const industries = computed(() => ['all', ...new Set((activeData.value?.items ?? []).map(item => item.industry || '未标注'))]);
 const items = computed(() => sortAuctionItems(
-  (data.value?.items ?? []).filter(item => (tier.value === 'all' || item.tier === tier.value) && (industry.value === 'all' || (item.industry || '未标注') === industry.value)),
-  sortMode.value
+  (activeData.value?.items ?? []).filter(item => (tier.value === 'all' || item.tier === tier.value) && (industry.value === 'all' || (item.industry || '未标注') === industry.value)),
+  sortMode.value,
+  snatchSort.value
 ));
 const selectedModelItems = computed(() => (model.value?.items ?? []).filter(item => item.bucket === 'selected').slice(0, 3));
 const auctionMetrics = computed(() => [
-  { key: 'candidate-count', label: '候选数', value: data.value?.metrics.candidate_count ?? '--' },
-  { key: 'strong-high-open', label: '强势高开', value: data.value?.metrics.strong_high_open_count ?? '--', tone: 'positive' as const },
-  { key: 'high-risk', label: '高风险', value: data.value?.metrics.high_risk_count ?? '--', tone: 'negative' as const },
-  { key: 'turnover', label: '竞价成交额', value: formatMoney(data.value?.metrics.total_turnover_cny) }
+  { key: 'candidate-count', label: sortMode.value === 'snatch' ? '抢筹命中' : '候选数', value: activeData.value?.metrics.candidate_count ?? '--' },
+  { key: 'strong-high-open', label: '强势高开', value: activeData.value?.metrics.strong_high_open_count ?? '--', tone: 'positive' as const },
+  { key: 'high-risk', label: '高风险', value: activeData.value?.metrics.high_risk_count ?? '--', tone: 'negative' as const },
+  { key: 'turnover', label: '竞价成交额', value: formatMoney(activeData.value?.metrics.total_turnover_cny) }
 ]);
 
 async function loadLatest() {
@@ -61,18 +70,37 @@ async function loadLatest() {
     data.value = await getAuctionLatest(100);
     error.value = null;
   } catch (cause) {
+    data.value = null;
     error.value = cause instanceof Error ? cause.message : '读取竞价雷达失败';
   } finally {
     loading.value = false;
   }
 }
 
+async function loadSnatch(refresh = false) {
+  snatchLoading.value = true;
+  snatchError.value = null;
+  try {
+    snatchData.value = await getAuctionSnatch(tradeDate.value, 100, refresh);
+  } catch (cause) {
+    snatchData.value = null;
+    snatchError.value = cause instanceof Error ? cause.message : '读取竞价抢筹结果失败';
+  } finally {
+    snatchLoading.value = false;
+  }
+}
+
 async function refreshSnapshot() {
+  if (sortMode.value === 'snatch') {
+    await loadSnatch(true);
+    return;
+  }
   error.value = null;
   try {
     await snapshotPolling.run();
     await loadLatest();
   } catch (cause) {
+    data.value = null;
     error.value = cause instanceof Error ? cause.message : '刷新竞价雷达失败';
   }
 }
@@ -124,6 +152,25 @@ function tierLabel(value: AuctionSnapshotItem['tier']) {
   return { strong_high_open: '强势高开', volume_leader: '放量活跃', risk_overheat: '高开过热', weak_low_open: '低开偏弱', reversal_watch: '低开观察', neutral: '中性' }[value];
 }
 
+function disableNonTradingDate(current: dayjs.Dayjs) {
+  const day = current.day();
+  return day === 0 || day === 6;
+}
+
+function handleDateChange(value: string) {
+  setTradeDate(value);
+  void loadModelCache();
+  if (sortMode.value === 'snatch') void loadSnatch();
+}
+
+function snatchTag(item: AuctionSnapshotItem) {
+  const parts: string[] = [];
+  if (item.last_second_price_up === true) parts.push(`抢筹抬价 ${formatPct(item.last_second_pct)}`);
+  if (item.limit_up_3d === true) parts.push('3日涨停');
+  if (item.limit_up_pattern) parts.push(item.limit_up_pattern);
+  return parts.join(' / ');
+}
+
 function snapshotStatusLabel(value: AuctionSnapshotResponse['snapshot_status'] | undefined) {
   return { fresh: '实时', cached: '缓存', stale: '过期', missing: '缺失' }[value ?? 'missing'];
 }
@@ -151,6 +198,11 @@ function asAuctionItem(value: unknown) {
 onMounted(async () => {
   await Promise.all([loadLatest(), loadModelCache()]);
 });
+
+watch(sortMode, mode => {
+  industry.value = 'all';
+  if (mode === 'snatch') void loadSnatch();
+});
 </script>
 
 <template>
@@ -159,15 +211,20 @@ onMounted(async () => {
       <template #meta>
         <div class="flex items-center gap-6px">
           <span>{{ tradeDate }}</span>
-          <StatusTag :status="statusTagValue(data?.snapshot_status)" />
-          <span>{{ snapshotStatusLabel(data?.snapshot_status) }}</span>
+          <StatusTag :status="statusTagValue(activeData?.snapshot_status)" />
+          <span>{{ snapshotStatusLabel(activeData?.snapshot_status) }}</span>
         </div>
       </template>
-      <a-date-picker :value="dayjs(tradeDate)" value-format="YYYY-MM-DD" @change="(_, value) => { setTradeDate(String(value)); void loadModelCache(); }" />
-      <a-button :loading="snapshotPolling.polling.value" @click="refreshSnapshot">刷新快照</a-button>
+      <a-date-picker :value="dayjs(tradeDate)" value-format="YYYY-MM-DD" :disabled-date="disableNonTradingDate" @change="(_, value) => handleDateChange(String(value))" />
+      <a-button
+        :loading="sortMode === 'snatch' ? snatchLoading : snapshotPolling.polling.value"
+        @click="refreshSnapshot"
+      >
+        刷新快照
+      </a-button>
     </PageHeader>
 
-    <a-alert v-if="error && items.length" :message="error" show-icon type="warning" />
+    <a-alert v-if="activeError && items.length" :message="activeError" show-icon type="warning" />
     <MetricStrip :items="auctionMetrics" />
 
     <section class="border border-border rounded-6px bg-container p-12px">
@@ -205,15 +262,26 @@ onMounted(async () => {
     </section>
 
     <section class="border border-border rounded-6px bg-container p-12px">
-      <SectionHeader title="竞价强度榜" source="竞价快照" :updated-at="formatGeneratedAt(data?.generated_at)">
+      <SectionHeader title="竞价强度榜" :source="sortMode === 'snatch' ? 'eltdx 通达信竞价' : '竞价快照'" :updated-at="formatGeneratedAt(activeData?.generated_at)">
         <div class="auction-filters">
           <a-select v-model:value="tier" style="width: 120px" :options="[{ label: '全部分层', value: 'all' }, ...['strong_high_open','volume_leader','risk_overheat','reversal_watch','weak_low_open','neutral'].map(value => ({ label: tierLabel(value as AuctionSnapshotItem['tier']), value }))]" />
           <a-select v-model:value="industry" style="width: 130px" :options="industries.map(value => ({ label: value === 'all' ? '全部行业' : value, value }))" />
           <a-select v-model:value="sortMode" style="width: 130px" :options="AUCTION_SORT_OPTIONS" />
+          <a-select
+            v-if="sortMode === 'snatch'"
+            v-model:value="snatchSort"
+            style="width: 145px"
+            :options="[
+              { label: '几天几板', value: 'days_boards' },
+              { label: '竞价高开', value: 'open_gap' },
+              { label: '抬价幅度', value: 'last_second_pct' }
+            ]"
+          />
         </div>
       </SectionHeader>
       <div class="mb-8px pt-8px text-12px text-text-secondary">{{ getAuctionSortDescription(sortMode) }}</div>
-      <DataList :items="items" :loading="loading" :error="error && !items.length ? error : null" empty-description="暂无竞价数据，请刷新快照">
+      <div v-if="sortMode === 'snatch'" class="mb-8px text-12px text-text-secondary">结果来自涨停池候选与 eltdx 秒级竞价过程的交集，不再沿用综合强度榜补位。</div>
+      <DataList :items="items" :loading="activeLoading" :error="activeError && !items.length ? activeError : null" :empty-description="sortMode === 'snatch' ? '当前交易日暂无同时满足两项条件的股票' : '暂无竞价数据，请刷新快照'">
         <template #list-item="{ item }">
           <div class="auction-row auction-row--two-line" data-layout="two-row">
             <div class="auction-row__primary">
@@ -232,6 +300,7 @@ onMounted(async () => {
               <div class="auction-row__signals text-12px text-text-secondary">
                 <div>{{ asAuctionItem(item).signals.slice(0, 2).join(' / ') || '暂无信号' }}</div>
                 <div v-if="asAuctionItem(item).risk_flags.length" class="text-warning">{{ asAuctionItem(item).risk_flags.slice(0, 2).join(' / ') }}</div>
+                <div v-if="asAuctionItem(item).last_second_price_up === true || asAuctionItem(item).limit_up_3d === true" class="text-error">{{ snatchTag(asAuctionItem(item)) }}</div>
               </div>
             </div>
           </div>

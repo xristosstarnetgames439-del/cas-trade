@@ -14,6 +14,7 @@ describe('product route table', () => {
       '/watchlist',
       '/sentiment',
       '/chanlun',
+      '/strategies',
       '/system'
     ]);
   });
@@ -33,6 +34,14 @@ describe('product route table', () => {
 
   it('labels the market workbench as sector radar', () => {
     expect(productRoutes.find(route => route.path === '/market')?.meta?.title).toBe('板块雷达');
+  });
+
+  it('exposes strategy management in the sidebar', () => {
+    expect(productRoutes.find(route => route.path === '/strategies')).toMatchObject({
+      name: 'strategy-management',
+      component: 'layout.base$view.strategy-management',
+      meta: { title: '策略管理', order: 9, constant: true }
+    });
   });
 
   it('registers the ETF radar in the generated route contract', () => {

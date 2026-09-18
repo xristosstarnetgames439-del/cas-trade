@@ -19,6 +19,7 @@ from app.config import get_settings
 import app.deps as deps
 from app.deps import (
     app_state,
+    AUCTION_LIMIT_UP_3D_CACHE,
     AUCTION_SNAPSHOT_CACHE,
     CAPITAL_SUMMARY_CACHE,
     MARKET_RANKINGS_CACHE,
@@ -66,6 +67,7 @@ from app.models import (
 from app.providers.watchlist import WatchlistItem, parse_watchlist_text
 from app.services.auction import build_auction_snapshot
 from app.services.auction_review import build_auction_rule_buckets, score_auction_record
+from app.services.auction_snatch import find_limit_up_3d_symbols
 from app.services.auction_top3_training import build_signal_samples_from_top3
 from app.services.sentiment_monitor import SentimentMonitorConfig
 from app.services.background_jobs import CancelCheck, ProgressCallback
@@ -358,6 +360,7 @@ def _cached_auction_snapshot(limit: int) -> AuctionSnapshotResponse:
         ),
     ).model_copy(deep=True)
     _append_empty_hot_theme_status(result, hot_themes, hot_theme_status)
+    result = _enrich_auction_snatch_limit_up(result)
     saved = _auction_snapshot_store().save(result, captured_at=_auction_now())
     return _backfill_auction_snapshot_industries(saved)
 
@@ -372,6 +375,7 @@ def _refresh_auction_snapshot(limit: int) -> AuctionSnapshotResponse:
         hot_themes=hot_themes,
     )
     _append_empty_hot_theme_status(result, hot_themes, hot_theme_status)
+    result = _enrich_auction_snatch_limit_up(result)
     saved = _auction_snapshot_store().save(result, captured_at=now)
     return _backfill_auction_snapshot_industries(saved)
 
@@ -417,6 +421,27 @@ def _backfill_auction_snapshot_industries(
                 ),
             ],
         },
+    )
+
+
+def _enrich_auction_snatch_limit_up(snapshot: AuctionSnapshotResponse) -> AuctionSnapshotResponse:
+    """给竞价快照项标注 limit_up_3d（最近 3 个交易日有涨停收盘），按交易日缓存。"""
+    trade_date = snapshot.trade_date
+    if not trade_date or not snapshot.items:
+        return snapshot
+    limit_up_symbols = _auction_limit_up_3d_symbols(trade_date, snapshot.items)
+    items = [
+        item.model_copy(update={"limit_up_3d": item.symbol in limit_up_symbols})
+        for item in snapshot.items
+    ]
+    return snapshot.model_copy(deep=True, update={"items": items})
+
+
+def _auction_limit_up_3d_symbols(trade_date: str, items: list[object]) -> set[str]:
+    key = f"{_provider_cache_key(_kline_provider())}:{trade_date}"
+    return AUCTION_LIMIT_UP_3D_CACHE.get_or_set(
+        key,
+        lambda: find_limit_up_3d_symbols(_kline_provider(), items, trade_date=trade_date),
     )
 
 

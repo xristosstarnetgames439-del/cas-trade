@@ -15,6 +15,7 @@ import logging
 from datetime import datetime
 from threading import Event, Lock, Thread
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +35,8 @@ class BackgroundLoopSampler:
         error_message: str | None = None,
     ) -> None:
         self._thread_name = thread_name
-        self._clock = clock
+        # 未注入测试时钟时回退到真实时钟，避免 sample_once 里 self._clock() 变成 None 调用。
+        self._clock = clock or (lambda: datetime.now(ZoneInfo("Asia/Shanghai")))
         self._retry_seconds = retry_seconds
         self._idle_seconds = idle_seconds
         self._poll_seconds = poll_seconds

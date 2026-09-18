@@ -506,6 +506,18 @@ export type AuctionSnapshotItem = {
   signals: string[];
   risk_flags: string[];
   quote_time: string | null;
+  last_second_price_up: boolean | null;
+  last_second_pct: number | null;
+  prev_node_price: number | null;
+  prev_node_time: string | null;
+  limit_up_3d: boolean | null;
+  limit_up_pattern_days?: number | null;
+  limit_up_board_count?: number | null;
+  limit_up_pattern?: string | null;
+  limit_up_break_days?: number | null;
+  valid_raise_count?: number | null;
+  previous_auction_volume?: number | null;
+  auction_volume_ratio?: number | null;
 };
 
 export type AuctionSnapshotResponse = {
@@ -522,6 +534,29 @@ export type AuctionSnapshotResponse = {
   items: AuctionSnapshotItem[];
   source_status: StrongStockSourceStatus[];
   generated_at: string;
+};
+
+export type StrategyDefinition = {
+  id: string;
+  title: string;
+  path: string;
+  description: string;
+  // 与后端策略 Python 文件保持同一 data 契约，禁止在页面内另造条件结构。
+  conditions: { data: string[] };
+  exact_conditions: { data: Array<{ label: string; isselect: boolean }> };
+  status: 'active' | 'draft';
+  version?: number;
+};
+
+export type StrategyCreateRequest = {
+  title: string;
+  description: string;
+  require_last_second_price_up: boolean;
+  recent_limit_up_days: number;
+  min_open_gap_pct: number;
+  min_pattern_days: number;
+  min_board_count: number;
+  sort_by: 'days_boards' | 'open_gap' | 'last_second_pct';
 };
 
 export type AuctionTimelinePoint = {

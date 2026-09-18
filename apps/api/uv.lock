@@ -653,6 +653,15 @@ wheels = [
 ]
 
 [[package]]
+name = "eltdx"
+version = "2.0.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/bf/3c/8d4fb0adef605e9c344029321bb6573bca799147f88c6a9ad10be099ea5b/eltdx-2.0.5.tar.gz", hash = "sha256:2c242b337e395f3fe67e8c81dcaadd97eb5b03243e2afd90cd10f4e748bd85c6", size = 424983, upload-time = "2026-08-14T10:41:25.245Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/05/bd/ef80147e88cbb82bb9cb38e2089939371962414c70a057e67dcfd07f8d51/eltdx-2.0.5-py3-none-any.whl", hash = "sha256:9390aabc32fc5ecc53367a21e09d1008456e68bf2a070a4539d3d77060ad05fa", size = 359862, upload-time = "2026-08-14T10:41:23.619Z" },
+]
+
+[[package]]
 name = "et-xmlfile"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2789,6 +2798,7 @@ dependencies = [
     { name = "akshare" },
     { name = "curl-cffi" },
     { name = "czsc" },
+    { name = "eltdx" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "lightgbm" },
@@ -2823,6 +2833,7 @@ requires-dist = [
     { name = "akshare", specifier = ">=1.16.0" },
     { name = "curl-cffi", specifier = ">=0.15.0" },
     { name = "czsc", specifier = "==0.10.12" },
+    { name = "eltdx", specifier = "==2.0.5" },
     { name = "fastapi", specifier = ">=0.115.0" },
     { name = "httpx", specifier = ">=0.25.0,<0.26.0" },
     { name = "lightgbm", specifier = ">=4.6.0" },

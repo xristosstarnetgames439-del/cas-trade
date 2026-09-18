@@ -155,6 +155,7 @@ const local: App.I18n.Schema = {
     root: 'Market Overview',
     screener: 'Strong Stock Screener',
     auction: 'Auction Radar',
+    'strategy-management': 'Strategy Management',
     market: 'Sectors and Heatmap',
     'etf-radar': 'Huijin Holdings Tracker',
     stock: 'Stock Detail',

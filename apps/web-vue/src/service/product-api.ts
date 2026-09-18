@@ -86,6 +86,8 @@ import type {
   StockKlineResponse,
   StockQuoteResponse,
   StockResearchResponse,
+  StrategyCreateRequest,
+  StrategyDefinition,
   StrongStockIntradaySnapshot,
   StrongStockScreeningResponse,
   SystemCacheClearResponse,
@@ -225,6 +227,22 @@ export async function getHeatmapOverview(period: HeatmapPeriodKey): Promise<Heat
 export async function getAuctionLatest(limit = 100): Promise<AuctionSnapshotResponse> {
   return apiGet<AuctionSnapshotResponse>(`${API_BASE_URL}/api/auction/latest?limit=${encodeURIComponent(limit)}`, "读取竞价雷达快照失败");}
 
+export async function getAuctionSnatch(
+  tradeDate: string,
+  limit = 100,
+  refresh = false
+): Promise<AuctionSnapshotResponse> {
+  const params = new URLSearchParams({
+    trade_date: tradeDate,
+    limit: String(limit),
+    refresh: String(refresh)
+  });
+  return apiGet<AuctionSnapshotResponse>(
+    `${API_BASE_URL}/api/auction/snatch?${params.toString()}`,
+    '读取竞价抢筹结果失败'
+  );
+}
+
 export async function getAuctionSnapshot(limit = 100, refresh = false): Promise<AuctionSnapshotResponse> {
   const params = new URLSearchParams({
     limit: String(limit),
@@ -263,6 +281,32 @@ export async function getAuctionModelTop3(
     throw new Error(`读取竞价模型Top3失败：${response.status} ${detail}`);
   }
   return response.json() as Promise<AuctionModelTop3Response>;
+}
+
+export async function getStrategies(): Promise<{ items: StrategyDefinition[] }> {
+  return apiGet<{ items: StrategyDefinition[] }>(`${API_BASE_URL}/api/strategies`, "读取策略列表失败");
+}
+
+export async function createStrategy(request: StrategyCreateRequest): Promise<StrategyDefinition> {
+  return apiSend<StrategyDefinition>(`${API_BASE_URL}/api/strategies`, "新增策略失败", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(request),
+  });
+}
+
+export async function runStrategy(
+  strategyId: string,
+  tradeDate: string,
+  options: { limit?: number; exactConditions?: number[] } = {}
+): Promise<AuctionSnapshotResponse> {
+  const params = new URLSearchParams({ trade_date: tradeDate, limit: String(options.limit ?? 100) });
+  if (options.exactConditions) params.set('exact_conditions', options.exactConditions.join(','));
+  return apiSend<AuctionSnapshotResponse>(
+    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/run?${params.toString()}`,
+    "执行策略失败",
+    { method: "POST" },
+  );
 }
 
 export async function createAuctionModelTop3Job(tradeDate: string): Promise<BackgroundJobState> {

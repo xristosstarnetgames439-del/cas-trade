@@ -57,10 +57,16 @@ export const productRoutes: ElegantConstRoute[] = [
     meta: { title: '缠论工作台', icon: 'ant-design:fund-outlined', order: 8, constant: true }
   },
   {
+    name: 'strategy-management',
+    path: '/strategies',
+    component: 'layout.base$view.strategy-management',
+    meta: { title: '策略管理', icon: 'ant-design:filter-outlined', order: 9, constant: true }
+  },
+  {
     name: 'system',
     path: '/system',
     component: 'layout.base$view.system',
-    meta: { title: '模型与数据源', icon: 'ant-design:setting-outlined', order: 9, constant: true }
+    meta: { title: '模型与数据源', icon: 'ant-design:setting-outlined', order: 10, constant: true }
   },
   {
     name: 'settings',

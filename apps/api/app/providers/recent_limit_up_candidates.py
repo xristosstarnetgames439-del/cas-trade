@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from time import sleep
 from typing import Any, Callable
 
 from app.models import StrongStockCandidate, StrongStockDataUnavailable, StrongStockSourceStatus
@@ -49,7 +50,7 @@ class RecentLimitUpCandidateProvider:
             if len(rows_by_date) >= self.trading_days:
                 break
             try:
-                rows = self.pool_fetcher(date)
+                rows = _fetch_pool_rows(self.pool_fetcher, date)
             except Exception as exc:
                 errors.append(f"{date}: {exc}")
                 continue
@@ -77,6 +78,22 @@ class RecentLimitUpCandidateProvider:
             status="success",
             detail=f"东方财富涨停池已配置，回看最近 {self.trading_days} 个交易日",
         )
+
+
+def _fetch_pool_rows(pool_fetcher: PoolFetcher, date: str, *, attempts: int = 3) -> list[dict[str, object]]:
+    last_error: Exception | None = None
+    for attempt in range(max(1, attempts)):
+        try:
+            rows = pool_fetcher(date)
+        except Exception as exc:
+            last_error = exc
+            if attempt + 1 < attempts:
+                sleep(0.25 * (attempt + 1))
+            continue
+        return rows or []
+    if last_error is not None:
+        raise last_error
+    return []
 
 
 def parse_recent_limit_up_rows(

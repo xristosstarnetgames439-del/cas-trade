@@ -18,6 +18,7 @@ declare module "@elegant-router/types" {
     "root": "/";
     "screener": "/screener";
     "auction": "/auction";
+    "strategy-management": "/strategies";
     "market": "/market";
     "etf-radar": "/etf-radar";
     "stock": "/stock/:symbol";
@@ -91,6 +92,7 @@ declare module "@elegant-router/types" {
     | "root"
     | "screener"
     | "auction"
+    | "strategy-management"
     | "market"
     | "etf-radar"
     | "stock"
@@ -141,6 +143,7 @@ declare module "@elegant-router/types" {
     | "root"
     | "screener"
     | "auction"
+    | "strategy-management"
     | "market"
     | "etf-radar"
     | "stock"
@@ -195,6 +198,7 @@ declare module "@elegant-router/types" {
     | "root"
     | "screener"
     | "auction"
+    | "strategy-management"
     | "market"
     | "etf-radar"
     | "stock"

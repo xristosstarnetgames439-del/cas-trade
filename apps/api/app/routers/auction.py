@@ -134,6 +134,9 @@ from app.services.auction_review import (
 )
 
 from app.services.auction_sampler import AuctionSnapshotSampler
+from app.config import get_settings
+from app.providers.eltdx_auction import EltdxAuctionProvider
+from app.services.strategy_manager import StrategyManager
 
 from app.services.sector_workbench_sampler import (
     SectorWorkbenchSampler,
@@ -198,6 +201,42 @@ def get_latest_auction_snapshot(limit: int = 100) -> dict[str, object]:
     bounded_limit = max(1, min(limit, 100))
     result = _auction_snapshot_store().latest(limit=bounded_limit)
     result = _backfill_auction_snapshot_industries(result)
+    return result.model_dump(mode="json")
+
+
+@router.get("/api/auction/snatch")
+def get_auction_snatch_snapshot(
+    trade_date: str,
+    limit: int = 100,
+    refresh: bool = False,
+) -> dict[str, object]:
+    try:
+        datetime.strptime(trade_date, "%Y-%m-%d")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="trade_date 必须为 YYYY-MM-DD") from exc
+    bounded_limit = max(1, min(limit, 100))
+    provider = EltdxAuctionProvider()
+    cache_key = f"auction-snatch:{trade_date}:{bounded_limit}"
+
+    def load_or_build():
+        return StrategyManager().run(
+            "auction_snatch",
+            _candidate_provider(),
+            provider,
+            trade_date=trade_date,
+            data_dir=get_settings().data_dir,
+            limit=bounded_limit,
+            refresh=refresh,
+        )
+
+    try:
+        result = (
+            load_or_build()
+            if refresh
+            else AUCTION_SNAPSHOT_CACHE.get_or_refresh(cache_key, load_or_build)
+        )
+    except StrongStockDataUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     return result.model_dump(mode="json")
 
 
@@ -468,4 +507,3 @@ def create_intraday_snapshot(request: IntradaySnapshotRequest) -> dict[str, obje
     except StrongStockDataUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return result.model_dump(mode="json")
-

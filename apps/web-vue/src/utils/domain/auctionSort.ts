@@ -1,6 +1,7 @@
 import type { AuctionSnapshotItem } from "@/service/types";
 
-export type AuctionSortMode = "score" | "turnover" | "open_gap" | "turnover_rate" | "industry";
+export type AuctionSortMode = "score" | "turnover" | "open_gap" | "turnover_rate" | "industry" | "snatch";
+export type AuctionSnatchSortMode = "days_boards" | "open_gap" | "last_second_pct";
 
 export const AUCTION_LOW_TURNOVER_CNY = 30_000_000;
 
@@ -10,14 +11,22 @@ export const AUCTION_SORT_OPTIONS: Array<{ label: string; value: AuctionSortMode
   { label: "高开强度", value: "open_gap" },
   { label: "换手优先", value: "turnover_rate" },
   { label: "行业聚集", value: "industry" },
+  { label: "竞价抢筹", value: "snatch" },
 ];
 
 export function sortAuctionItems(
   items: readonly AuctionSnapshotItem[],
   mode: AuctionSortMode,
+  snatchSort: AuctionSnatchSortMode = "days_boards",
 ): AuctionSnapshotItem[] {
-  const industryStats = buildIndustrySortStats(items);
-  return [...items].sort((left, right) => {
+  const visibleItems = mode === "snatch"
+    ? items.filter(item => item.last_second_price_up === true && item.limit_up_3d === true && item.open_gap_pct !== null && item.open_gap_pct !== undefined && item.open_gap_pct >= -2)
+    : items;
+  if (mode === "snatch") {
+    return [...visibleItems].sort((left, right) => bySnatch(left, right, snatchSort));
+  }
+  const industryStats = buildIndustrySortStats(visibleItems);
+  return [...visibleItems].sort((left, right) => {
     if (mode === "turnover") {
       return byDesc(left.turnover_cny, right.turnover_cny) || byScore(left, right) || bySymbol(left, right);
     }
@@ -34,6 +43,16 @@ export function sortAuctionItems(
   });
 }
 
+function bySnatch(left: AuctionSnapshotItem, right: AuctionSnapshotItem, mode: AuctionSnatchSortMode): number {
+  if (mode === "open_gap") {
+    return byDesc(left.open_gap_pct, right.open_gap_pct) || byDesc(left.limit_up_pattern_days, right.limit_up_pattern_days) || byDesc(left.limit_up_board_count, right.limit_up_board_count) || bySymbol(left, right);
+  }
+  if (mode === "last_second_pct") {
+    return byDesc(left.last_second_pct, right.last_second_pct) || byDesc(left.open_gap_pct, right.open_gap_pct) || bySymbol(left, right);
+  }
+  return byDesc(left.limit_up_pattern_days, right.limit_up_pattern_days) || byDesc(left.limit_up_board_count, right.limit_up_board_count) || byDesc(left.open_gap_pct, right.open_gap_pct) || bySymbol(left, right);
+}
+
 export function getAuctionSortDescription(mode: AuctionSortMode): string {
   if (mode === "turnover") {
     return "按成交额优先，适合 9:25 后确认盘口可信度。";
@@ -46,6 +65,9 @@ export function getAuctionSortDescription(mode: AuctionSortMode): string {
   }
   if (mode === "industry") {
     return "按行业聚集优先，适合先看早盘主线是否成团。";
+  }
+  if (mode === "snatch") {
+    return "竞价抢筹：最后一刻抬价、前 3 个交易日有涨停且竞价开盘不低于 -2%，默认按几天几板排序。";
   }
   return "按竞价模型综合排序，成交额作为可信度权重而不是唯一标准。";
 }

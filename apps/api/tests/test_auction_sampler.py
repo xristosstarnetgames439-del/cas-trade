@@ -17,6 +17,12 @@ def test_auction_sample_window_covers_0925_lock_period() -> None:
     assert not is_auction_sample_window(datetime(2026, 7, 1, 9, 30, 30))
 
 
+def test_auction_sampler_defaults_to_real_clock_when_not_provided() -> None:
+    sampler = AuctionSnapshotSampler(refresh=lambda: None)
+    assert callable(sampler._clock)
+    assert sampler._clock() is not None
+
+
 def test_auction_sampler_samples_only_inside_window() -> None:
     calls: list[str] = []
     current = datetime(2026, 7, 1, 9, 13, 0)

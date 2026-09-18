@@ -62,6 +62,11 @@ class AuctionSnapshotStore:
                 self._snapshot = _backfill_locked_static_metadata(self._snapshot, stored)
                 self._persist_locked_snapshot(self._snapshot)
                 return self._snapshot.model_copy(deep=True)
+            # 09:25 锁定点：与上一节点(09:24:50)对比，标注竞价最后一秒抬价抢筹
+            if timeline_label == "09:25":
+                prev_point = self._timeline.get("09:24:50")
+                if prev_point is not None:
+                    stored = _enrich_last_second_flags(stored, prev_point)
             self._snapshot = stored
             self._saved_at = monotonic()
             if timeline_label is not None:
@@ -234,3 +239,36 @@ def _backfill_locked_static_metadata(
             update["theme_resonance"] = source.theme_resonance
         items.append(item.model_copy(update=update) if update else item)
     return locked.model_copy(deep=True, update={"items": items})
+
+
+def _enrich_last_second_flags(
+    snapshot: AuctionSnapshotResponse,
+    prev_point: tuple[str, AuctionSnapshotResponse],
+) -> AuctionSnapshotResponse:
+    """对比上一节点(09:24:50)与 09:25 快照，标注最后一秒抬价抢筹。
+
+    对同一标的：9:25 价格高于上一节点价格则 last_second_price_up=True，
+    并记录最后一秒涨幅、上一节点价格与抓取时间；数据缺失时保持 None。
+    """
+    prev_captured_at, prev_snapshot = prev_point
+    prev_by_symbol = {item.symbol: item for item in prev_snapshot.items}
+    items = []
+    for item in snapshot.items:
+        prev_item = prev_by_symbol.get(item.symbol)
+        prev_price = prev_item.last_price if prev_item is not None else None
+        current_price = item.last_price
+        if prev_price is None or prev_price <= 0 or current_price is None:
+            items.append(item)
+            continue
+        last_second_pct = round((current_price - prev_price) / prev_price * 100, 4)
+        items.append(
+            item.model_copy(
+                update={
+                    "last_second_price_up": current_price > prev_price,
+                    "last_second_pct": last_second_pct,
+                    "prev_node_price": prev_price,
+                    "prev_node_time": prev_captured_at,
+                }
+            )
+        )
+    return snapshot.model_copy(deep=True, update={"items": items})

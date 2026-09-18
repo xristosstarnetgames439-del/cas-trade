@@ -3,13 +3,22 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Literal, Mapping
 
-from pydantic import BaseModel, ConfigDict, Field, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 
 
 ScreenStatus = Literal["focus", "wait_pullback", "reduce_risk", "data_incomplete"]
 RiskAction = Literal["hold_watch", "reduce", "empty"]
 IntradayAction = Literal["watch", "low_buy_watch", "reduce", "avoid_chase", "data_incomplete"]
-GsgfIntradayConfirmation = Literal["盘中确认", "等待确认", "低吸确认", "减仓确认", "风险失效", "无GSGF上下文"]
+GsgfIntradayConfirmation = Literal[
+    "盘中确认", "等待确认", "低吸确认", "减仓确认", "风险失效", "无GSGF上下文"
+]
 SourceStatusValue = Literal["success", "failed", "disabled", "missing_key", "stale"]
 EtfThreeFactorMode = Literal["three_factor", "two_factor", "incomplete"]
 EtfThreeFactorLevel = Literal["high", "medium", "low", "incomplete"]
@@ -45,7 +54,9 @@ SentimentWatchlistAction = Literal["重点盯", "等确认", "风险回避"]
 BackgroundJobStatus = Literal["pending", "running", "success", "failed", "canceled"]
 AuctionModelBucket = Literal["selected", "attack", "watch", "avoid"]
 AuctionModelCacheStatus = Literal["generated", "cached"]
-AuctionTop3EntryPolicy = Literal["open_0930", "after_0935_confirm", "before_1000_strength", "close_follow"]
+AuctionTop3EntryPolicy = Literal[
+    "open_0930", "after_0935_confirm", "before_1000_strength", "close_follow"
+]
 AuctionTop3ExitPolicy = Literal[
     "intraday_stop",
     "intraday_take_profit",
@@ -54,7 +65,9 @@ AuctionTop3ExitPolicy = Literal[
     "next_close_exit",
 ]
 AuctionTop3TradeLabel = Literal["win", "loss", "neutral", "data_incomplete"]
-AuctionReviewStatus = Literal["pending", "intraday_done", "day_done", "next_day_done", "data_incomplete"]
+AuctionReviewStatus = Literal[
+    "pending", "intraday_done", "day_done", "next_day_done", "data_incomplete"
+]
 ModelMaintenanceProvider = Literal["openai", "deepseek", "openai_compatible"]
 ModelMaintenanceHealthStatus = Literal[
     "normal",
@@ -166,10 +179,7 @@ class FrozenDict(dict[str, Any]):
     def __init__(self, value: Mapping[str, Any] | None = None) -> None:
         dict.__init__(
             self,
-            {
-                str(key): _freeze_param_value(item)
-                for key, item in (value or {}).items()
-            },
+            {str(key): _freeze_param_value(item) for key, item in (value or {}).items()},
         )
 
     def _immutable(self, *_args: Any, **_kwargs: Any) -> None:
@@ -833,7 +843,9 @@ class ChanlunBackfillRequest(BaseModel):
 
     @field_validator("periods")
     @classmethod
-    def reject_duplicate_periods(cls, value: list[Literal["5m", "30m", "60m"]]) -> list[Literal["5m", "30m", "60m"]]:
+    def reject_duplicate_periods(
+        cls, value: list[Literal["5m", "30m", "60m"]]
+    ) -> list[Literal["5m", "30m", "60m"]]:
         if len(value) != len(set(value)):
             raise ValueError("periods must not contain duplicates")
         return value
@@ -1366,6 +1378,19 @@ class AuctionSnapshotItem(BaseModel):
     signals: list[str] = Field(default_factory=list)
     risk_flags: list[str] = Field(default_factory=list)
     quote_time: str | None = None
+    # 竞价抢筹策略：9:25 价格高于上一节点(09:24:50)的最后一秒抬价，以及近 3 个交易日涨停
+    last_second_price_up: bool | None = None
+    last_second_pct: float | None = None
+    prev_node_price: float | None = None
+    prev_node_time: str | None = None
+    limit_up_3d: bool | None = None
+    limit_up_pattern_days: int | None = None
+    limit_up_board_count: int | None = None
+    limit_up_pattern: str | None = None
+    limit_up_break_days: int | None = None
+    valid_raise_count: int | None = None
+    previous_auction_volume: float | None = None
+    auction_volume_ratio: float | None = None
 
 
 class AuctionSnapshotResponse(BaseModel):
@@ -1430,7 +1455,9 @@ class AuctionModelBacktestSummary(BaseModel):
 
 
 class AuctionModelTop3Response(BaseModel):
-    run_id: str = Field(default_factory=lambda: datetime.now().astimezone().strftime("%Y%m%d%H%M%S%f"))
+    run_id: str = Field(
+        default_factory=lambda: datetime.now().astimezone().strftime("%Y%m%d%H%M%S%f")
+    )
     trade_date: str
     feature_end_date: str
     model_version: str
@@ -1497,7 +1524,9 @@ class AuctionTop3SignalSample(BaseModel):
     risk_flags: list[str] = Field(default_factory=list)
     feature_snapshot: dict[str, Any] = Field(default_factory=dict)
     source_status: list[StrongStockSourceStatus] = Field(default_factory=list)
-    created_at: str = Field(default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds"))
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds")
+    )
 
 
 class AuctionTop3SimulatedTradeSample(BaseModel):
@@ -1518,7 +1547,9 @@ class AuctionTop3SimulatedTradeSample(BaseModel):
     max_drawdown_pct: float | None = None
     max_favorable_pct: float | None = None
     label: AuctionTop3TradeLabel = "data_incomplete"
-    created_at: str = Field(default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds"))
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds")
+    )
 
     @model_validator(mode="after")
     def infer_label_from_return(self) -> "AuctionTop3SimulatedTradeSample":
@@ -1545,7 +1576,9 @@ class AuctionTop3SimulatedPerformancePoint(BaseModel):
     cumulative_return_pct: float | None = None
     equity: float | None = None
     max_drawdown_pct: float | None = None
-    created_at: str = Field(default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds"))
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds")
+    )
 
 
 class AuctionTop3ManualTradeSample(BaseModel):
@@ -1561,7 +1594,9 @@ class AuctionTop3ManualTradeSample(BaseModel):
     buy_reason: str = ""
     sell_reason: str = ""
     return_pct: float | None = None
-    created_at: str = Field(default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds"))
+    created_at: str = Field(
+        default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds")
+    )
 
 
 class AuctionTop3TrainingSummary(BaseModel):
@@ -1580,7 +1615,9 @@ class AuctionTop3PerformanceResponse(BaseModel):
     summary: dict[str, Any] = Field(default_factory=dict)
     points: list[AuctionTop3SimulatedPerformancePoint] = Field(default_factory=list)
     trades: list[AuctionTop3SimulatedTradeSample] = Field(default_factory=list)
-    generated_at: str = Field(default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds"))
+    generated_at: str = Field(
+        default_factory=lambda: datetime.now().astimezone().isoformat(timespec="seconds")
+    )
 
 
 class SectorRadarItem(BaseModel):
@@ -2119,9 +2156,7 @@ CapitalSignalStage = Literal["intraday", "post_close", "disclosure"]
 CapitalEvidenceLevel = Literal["常规", "观察", "疑似", "较强"]
 HuijinEtfRole = Literal["core", "validator"]
 EtfActivityDirection = Literal["increase", "decrease", "flat", "unknown"]
-EtfValidationState = Literal[
-    "confirmed_increase", "confirmed_decrease", "divergent", "incomplete"
-]
+EtfValidationState = Literal["confirmed_increase", "confirmed_decrease", "divergent", "incomplete"]
 HuijinBaselineSourceKind = Literal["reported", "derived", "official"]
 
 
@@ -2549,4 +2584,3 @@ class NotificationSendRequest(BaseModel):
     title: str
     message_text: str
     channel_ids: list[str] = Field(default_factory=list, max_length=20)
-

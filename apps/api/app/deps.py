@@ -289,6 +289,10 @@ CAPITAL_SUMMARY_CACHE: TtlCache[CapitalSummaryResponse] = TtlCache(
 AUCTION_SNAPSHOT_CACHE: TtlCache[AuctionSnapshotResponse] = TtlCache(
     ttl_seconds=15, name="auction_snapshot"
 )
+# 竞价抢筹策略：按交易日缓存近 3 个交易日有涨停收盘的标的集合（日级静态数据，1 小时 TTL）。
+AUCTION_LIMIT_UP_3D_CACHE: TtlCache[set[str]] = TtlCache(
+    ttl_seconds=3600, name="auction_limit_up_3d"
+)
 SECTOR_RADAR_CACHE: TtlCache[SectorRadarResponse] = TtlCache(ttl_seconds=45, name="sector_radar")
 PLATE_ROTATION_REFERENCE_CACHE: TtlCache[PlateRotationReferenceResponse] = TtlCache(
     ttl_seconds=120, name="plate_rotation_reference"
@@ -317,6 +321,7 @@ CACHE_DEFINITIONS = (
     ("market_rankings", "home", MARKET_RANKINGS_CACHE),
     ("capital_summary", "home", CAPITAL_SUMMARY_CACHE),
     ("auction_snapshot", "auction", AUCTION_SNAPSHOT_CACHE),
+    ("auction_limit_up_3d", "auction", AUCTION_LIMIT_UP_3D_CACHE),
     ("sector_radar", "sectors", SECTOR_RADAR_CACHE),
     ("plate_rotation_reference", "sectors", PLATE_ROTATION_REFERENCE_CACHE),
     ("sector_intraday", "sectors", SECTOR_INTRADAY_CACHE),

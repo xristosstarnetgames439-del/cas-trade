@@ -186,6 +186,63 @@ def test_auction_snapshot_store_backfills_locked_industries_from_mapping() -> No
     assert store.latest(limit=5).items[1].industry == "房地产开发"
 
 
+def test_auction_snapshot_store_marks_last_second_price_up_at_0925() -> None:
+    store = AuctionSnapshotStore()
+    prev = AuctionSnapshotResponse(
+        trade_date="2026-07-01",
+        items=[
+            AuctionSnapshotItem(symbol="300001.SZ", name="抬价一号", last_price=10.0),
+            AuctionSnapshotItem(symbol="300002.SZ", name="回落二号", last_price=10.0),
+        ],
+    )
+    final = AuctionSnapshotResponse(
+        trade_date="2026-07-01",
+        items=[
+            AuctionSnapshotItem(symbol="300001.SZ", name="抬价一号", last_price=10.4),
+            AuctionSnapshotItem(symbol="300002.SZ", name="回落二号", last_price=9.9),
+            AuctionSnapshotItem(symbol="300003.SZ", name="新进三号", last_price=12.0),
+        ],
+    )
+
+    store.save(prev, captured_at=datetime(2026, 7, 1, 9, 24, 50))
+    locked = store.save(final, captured_at=datetime(2026, 7, 1, 9, 25, 0))
+
+    first = next(item for item in locked.items if item.symbol == "300001.SZ")
+    second = next(item for item in locked.items if item.symbol == "300002.SZ")
+    third = next(item for item in locked.items if item.symbol == "300003.SZ")
+    assert first.last_second_price_up is True
+    assert first.last_second_pct == 4.0
+    assert first.prev_node_price == 10.0
+    assert first.prev_node_time == "2026-07-01T09:24:50"
+    assert second.last_second_price_up is False
+    assert second.last_second_pct == -1.0
+    assert second.prev_node_price == 10.0
+    assert third.last_second_price_up is None
+    assert third.limit_up_3d is None
+
+
+def test_auction_snapshot_store_persists_last_second_flags_after_restart(tmp_path) -> None:
+    store = AuctionSnapshotStore(data_dir=tmp_path)
+    prev = AuctionSnapshotResponse(
+        trade_date="2026-07-01",
+        items=[AuctionSnapshotItem(symbol="300001.SZ", name="抬价一号", last_price=10.0)],
+    )
+    final = AuctionSnapshotResponse(
+        trade_date="2026-07-01",
+        items=[AuctionSnapshotItem(symbol="300001.SZ", name="抬价一号", last_price=10.4)],
+    )
+    store.save(prev, captured_at=datetime(2026, 7, 1, 9, 24, 50))
+    store.save(final, captured_at=datetime(2026, 7, 1, 9, 25, 0))
+
+    reloaded = AuctionSnapshotStore(data_dir=tmp_path)
+    latest = reloaded.latest(limit=5)
+    first = latest.items[0]
+    assert first.symbol == "300001.SZ"
+    assert first.last_second_price_up is True
+    assert first.last_second_pct == 4.0
+    assert first.prev_node_time == "2026-07-01T09:24:50"
+
+
 def test_auction_snapshot_store_restores_locked_0925_snapshot_after_restart(tmp_path) -> None:
     store = AuctionSnapshotStore(data_dir=tmp_path)
     store.save(_snapshot("300025.SZ", 92), captured_at=datetime(2026, 7, 1, 9, 25, 0))

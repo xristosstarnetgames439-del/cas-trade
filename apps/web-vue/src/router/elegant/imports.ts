@@ -1,6 +1,5 @@
 import type { RouteComponent } from 'vue-router';
 import type { RouteLayout } from '@elegant-router/types';
-
 import BaseLayout from '@/layouts/base-layout/index.vue';
 import BlankLayout from '@/layouts/blank-layout/index.vue';
 
@@ -16,6 +15,7 @@ export const views: Record<string, RouteComponent | (() => Promise<RouteComponen
   home: () => import('@/views/HomeView.vue'),
   screener: () => import('@/views/ScreenerView.vue'),
   auction: () => import('@/views/AuctionView.vue'),
+  'strategy-management': () => import('@/views/StrategyManagementView.vue'),
   market: () => import('@/views/MarketView.vue'),
   'etf-radar': () => import('@/views/EtfRadarView.vue'),
   stock: () => import('@/views/StockView.vue'),
