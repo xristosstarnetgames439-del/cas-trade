@@ -309,6 +309,20 @@ export async function runStrategy(
   );
 }
 
+export async function getStrategyRun(
+  strategyId: string,
+  tradeDate: string
+): Promise<AuctionSnapshotResponse | null> {
+  const response = await apiFetch(
+    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/runs/${encodeURIComponent(tradeDate)}`
+  );
+  if (response.status === 404) return null;
+  if (!response.ok) {
+    throw new Error(`读取策略筛选记录失败：${response.status} ${await response.text()}`);
+  }
+  return response.json() as Promise<AuctionSnapshotResponse>;
+}
+
 export async function createAuctionModelTop3Job(tradeDate: string): Promise<BackgroundJobState> {
   const params = new URLSearchParams({ trade_date: tradeDate });
   return apiSend<BackgroundJobState>(`${API_BASE_URL}/api/auction/model/top3/jobs?${params.toString()}`, "启动竞价模型Top3生成任务失败", {

@@ -13,6 +13,7 @@ from app.services.auction_strategy_runtime import (
     _board_stats,
     _break_days,
     _sort_key,
+    _strategy_item,
     recent_limit_up_candidates,
 )
 from app.strategies.auction_snatch import _matches_exact, run
@@ -251,6 +252,55 @@ def test_auction_snatch_excludes_open_gap_below_minus_two() -> None:
     )
 
     assert result.items == []
+
+
+def test_strategy_item_records_trade_date_close_price() -> None:
+    class _Kline:
+        def get_klines(self, symbol: str, count: int = 220):
+            assert symbol == "000802.SZ"
+            return [_bar("2026-08-13", 6.00), _bar("2026-08-14", 6.66)]
+
+    item = _strategy_item(
+        _candidate("000802.SZ", "北京文化", "20260813"),
+        AuctionSnatchObservation(
+            symbol="000802.SZ",
+            open_price=6.20,
+            open_change_pct=-0.96,
+            open_volume=100,
+            open_amount=620,
+            previous_price=5.85,
+            previous_time="09:24:57",
+            last_second_pct=5.9829,
+        ),
+        trade_date="2026-08-14",
+        recent_days=3,
+        kline_provider=_Kline(),
+    )
+    assert item.close_price == 6.66
+
+
+def test_strategy_item_leaves_close_price_empty_before_daily_bar() -> None:
+    class _Kline:
+        def get_klines(self, symbol: str, count: int = 220):
+            return [_bar("2026-08-13", 6.00)]
+
+    item = _strategy_item(
+        _candidate("000802.SZ", "北京文化", "20260813"),
+        AuctionSnatchObservation(
+            symbol="000802.SZ",
+            open_price=6.20,
+            open_change_pct=-0.96,
+            open_volume=100,
+            open_amount=620,
+            previous_price=5.85,
+            previous_time="09:24:57",
+            last_second_pct=5.9829,
+        ),
+        trade_date="2026-08-14",
+        recent_days=3,
+        kline_provider=_Kline(),
+    )
+    assert item.close_price is None
 
 
 def test_days_boards_sort_keeps_zero_open_above_negative_open() -> None:

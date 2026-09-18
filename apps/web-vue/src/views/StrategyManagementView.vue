@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import dayjs from 'dayjs';
-import { createStrategy, getStrategies, runStrategy } from '@/service/product-api';
+import { createStrategy, getStrategies, getStrategyRun, runStrategy } from '@/service/product-api';
 import type { AuctionSnapshotItem, AuctionSnapshotResponse, StrategyCreateRequest, StrategyDefinition } from '@/service/types';
 import { useTradeDate } from '@/composables/useTradeDate';
 import { formatWorkbenchNumber } from '@/components/common/workbench/workbench';
@@ -19,6 +19,9 @@ const error = ref<string | null>(null);
 const createOpen = ref(false);
 const creating = ref(false);
 const selectedExactFilterSlots = ref<number[]>([]);
+const storedRun = ref<AuctionSnapshotResponse | null>(null);
+const hasStoredRun = computed(() => storedRun.value !== null);
+let probeSeq = 0;
 const form = reactive<StrategyCreateRequest>({
   title: '',
   description: '',
@@ -49,24 +52,59 @@ async function loadStrategies() {
 
 async function execute() {
   if (!activeStrategy.value) return;
+  const strategyId = activeStrategy.value.id;
+  const date = tradeDate.value;
   loading.value = true;
   error.value = null;
+  result.value = null;
   try {
-    result.value = await runStrategy(activeStrategy.value.id, tradeDate.value, {
+    const snapshot = await runStrategy(strategyId, date, {
       limit: 100,
       exactConditions: selectedExactFilterSlots.value
     });
+    if (activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
+    result.value = snapshot;
+    storedRun.value = snapshot;
+    probeSeq += 1;
   } catch (cause) {
+    if (activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
     result.value = null;
     error.value = cause instanceof Error ? cause.message : '执行策略失败';
   } finally {
-    loading.value = false;
+    if (activeStrategy.value?.id === strategyId && tradeDate.value === date) {
+      loading.value = false;
+    }
+  }
+}
+
+function viewStored() {
+  if (!storedRun.value) return;
+  error.value = null;
+  result.value = storedRun.value;
+}
+
+async function probeStored() {
+  const strategy = activeStrategy.value;
+  if (!strategy) {
+    storedRun.value = null;
+    return;
+  }
+  const seq = ++probeSeq;
+  const date = tradeDate.value;
+  try {
+    const snapshot = await getStrategyRun(strategy.id, date);
+    if (seq !== probeSeq) return;
+    storedRun.value = snapshot;
+  } catch {
+    if (seq !== probeSeq) return;
+    storedRun.value = null;
   }
 }
 
 function selectStrategy(item: StrategyDefinition) {
   activeStrategy.value = item;
   result.value = null;
+  storedRun.value = null;
   error.value = null;
   resetExactFilter();
 }
@@ -74,6 +112,7 @@ function selectStrategy(item: StrategyDefinition) {
 function backToStrategies() {
   activeStrategy.value = null;
   result.value = null;
+  storedRun.value = null;
   error.value = null;
 }
 
@@ -115,8 +154,12 @@ function resetExactFilter() {
 
 function handleDateChange(value: string) {
   setTradeDate(value);
-  if (activeStrategy.value && result.value) execute();
+  result.value = null;
 }
+
+watch([tradeDate, activeStrategy], () => {
+  void probeStored();
+});
 
 function disableNonTradingDate(current: dayjs.Dayjs) {
   return current.day() === 0 || current.day() === 6;
@@ -179,7 +222,17 @@ onMounted(loadStrategies);
         <span v-if="result?.generated_at" class="strategy-updated">
           更新 {{ dayjs(result.generated_at).format('HH:mm:ss') }}
         </span>
-        <a-button type="primary" :loading="loading" @click="execute">运行筛选</a-button>
+        <a-button data-testid="strategy-run-button" type="primary" :loading="loading" @click="execute">
+          运行筛选
+        </a-button>
+        <a-button
+          data-testid="strategy-view-button"
+          :type="hasStoredRun ? 'primary' : 'default'"
+          :disabled="!hasStoredRun || loading"
+          @click="viewStored"
+        >
+          查看筛选
+        </a-button>
       </div>
 
       <p class="mb-12px mt-8px text-13px text-text-secondary">{{ activeStrategy.description }}</p>
@@ -229,6 +282,7 @@ onMounted(loadStrategies);
               竞价 {{ formatWorkbenchNumber((item as AuctionSnapshotItem).open_gap_pct, 'percent') }}
             </span>
             <span>抬价 {{ formatWorkbenchNumber((item as AuctionSnapshotItem).last_second_pct, 'percent') }}</span>
+            <span>收盘 {{ formatWorkbenchNumber((item as AuctionSnapshotItem).close_price, 'price') }}</span>
             <span>
               有效抬价 {{ (item as AuctionSnapshotItem).valid_raise_count ?? '--' }} 次 · 量比
               {{ (item as AuctionSnapshotItem).auction_volume_ratio?.toFixed(2) ?? '--' }}
@@ -380,7 +434,8 @@ onMounted(loadStrategies);
 .result-row {
   display: grid;
   grid-template-columns:
-    minmax(180px, 1.2fr) minmax(90px, 0.5fr) minmax(110px, 0.6fr) minmax(100px, 0.6fr) minmax(160px, 0.8fr);
+    minmax(180px, 1.2fr) minmax(90px, 0.5fr) minmax(110px, 0.6fr) minmax(100px, 0.6fr) minmax(90px, 0.5fr)
+    minmax(160px, 0.8fr);
   width: 100%;
   gap: 12px;
   padding: 4px 0;

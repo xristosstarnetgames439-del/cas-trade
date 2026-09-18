@@ -154,7 +154,7 @@ def _strategy_item(
     recent_days: int,
     kline_provider: object | None = None,
 ) -> AuctionSnapshotItem:
-    extra_dates = _kline_limit_up_dates(
+    extra_dates, close_price = _kline_stats(
         kline_provider,
         candidate.symbol,
         candidate.name,
@@ -193,6 +193,7 @@ def _strategy_item(
         valid_raise_count=observation.valid_raise_count,
         previous_auction_volume=observation.previous_open_volume,
         auction_volume_ratio=observation.auction_volume_ratio,
+        close_price=close_price,
     )
 
 
@@ -238,19 +239,19 @@ def _candidate_limit_up_dates(candidate: StrongStockCandidate) -> set[str]:
     return {match for value in values for match in _DATE_PATTERN.findall(value)}
 
 
-def _kline_limit_up_dates(
+def _kline_stats(
     provider: object | None,
     symbol: str,
     name: str | None,
     *,
     trade_date: str,
-) -> set[str]:
+) -> tuple[set[str], float | None]:
     if provider is None or not symbol:
-        return set()
+        return set(), None
     try:
         bars = provider.get_klines(symbol, count=50)
     except Exception:
-        return set()
+        return set(), None
     trade_key = _as_date_key(trade_date)
     ratio = limit_up_ratio(symbol, name)
     ordered = sorted(
@@ -258,16 +259,17 @@ def _kline_limit_up_dates(
         key=lambda bar: _as_date_key(bar.date),
     )
     dates: set[str] = set()
+    close_price: float | None = None
     for index, bar in enumerate(ordered):
-        if index == 0:
-            continue
         day_key = _as_date_key(bar.date)
-        if day_key >= trade_key:
+        if day_key == trade_key:
+            close_price = float(bar.close)
+        if index == 0 or day_key >= trade_key:
             continue
         prev_close = ordered[index - 1].close
         if prev_close > 0 and is_limit_up_close(bar.close, prev_close, ratio):
             dates.add(day_key)
-    return dates
+    return dates, close_price
 
 
 def _as_date_key(value: str) -> str:

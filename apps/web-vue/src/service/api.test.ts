@@ -15,6 +15,7 @@ import {
   getMarketSentimentPercentile,
   getSectorReplicaRadar,
   getStockKline,
+  getStrategyRun,
   markAllEtfAlertsRead,
   markEtfAlertRead,
   searchStockSymbols
@@ -85,6 +86,15 @@ describe('apiRequest', () => {
 
     expect(fetchMock.mock.calls[0]?.[0]).toContain(
       '/api/auction/model/top3?trade_date=2026-07-16&cache_only=true'
+    );
+  });
+
+  it('returns null when a strategy run is missing', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('not found', { status: 404 }));
+
+    await expect(getStrategyRun('auction_snatch', '2026-09-18')).resolves.toBeNull();
+    expect(String(fetchMock.mock.calls[0]?.[0])).toContain(
+      '/api/strategies/auction_snatch/runs/2026-09-18'
     );
   });
 

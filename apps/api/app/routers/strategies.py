@@ -10,6 +10,7 @@ from app.compat import _candidate_provider
 from app.config import get_settings
 from app.models import StrongStockDataUnavailable
 from app.providers.eltdx_auction import EltdxAuctionProvider
+from app.services.strategy_history_store import StrategyHistoryStore
 from app.services.strategy_manager import StrategyManager
 
 router = APIRouter()
@@ -73,6 +74,21 @@ def run_strategy(
     except StrongStockDataUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return result.model_dump(mode="json")
+
+
+@router.get("/api/strategies/{strategy_id}/runs/{trade_date}")
+def get_strategy_run(strategy_id: str, trade_date: str) -> dict[str, object]:
+    try:
+        datetime.strptime(trade_date, "%Y-%m-%d")
+        StrategyManager()._path(strategy_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail="策略不存在") from exc
+    stored = StrategyHistoryStore(get_settings().data_dir).load_latest(strategy_id, trade_date)
+    if stored is None:
+        raise HTTPException(status_code=404, detail="暂无该日筛选记录")
+    return stored.model_dump(mode="json")
 
 
 def _parse_exact_conditions(value: str | None) -> list[int] | None:

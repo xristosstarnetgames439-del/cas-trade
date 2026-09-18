@@ -8,6 +8,7 @@ from app.services.auction_snatch import (
     AuctionSnatchObservation,
     AuctionSnatchScan,
 )
+from app.services.strategy_history_store import StrategyHistoryStore
 from app.services.strategy_manager import StrategyManager
 
 
@@ -101,6 +102,10 @@ def test_manager_creates_discovers_and_runs_strategy(tmp_path) -> None:
     )
 
     assert auction_provider.calls == 2
+    history = StrategyHistoryStore(tmp_path / "data")
+    stored = history.load_latest("personal_strategy_1", "2026-08-14")
+    assert stored is not None
+    assert [item.symbol for item in stored.items] == ["000802.SZ"]
 
     with pytest.raises(ValueError, match="精确筛选条件不存在"):
         manager.run(
@@ -111,6 +116,54 @@ def test_manager_creates_discovers_and_runs_strategy(tmp_path) -> None:
             data_dir=tmp_path / "data",
             exact_conditions=[0],
         )
+
+
+def test_manager_saves_history_for_exact_filters_and_empty_pool(tmp_path) -> None:
+    strategies_dir = tmp_path / "strategies"
+    manager = StrategyManager(strategies_dir)
+    manager.create(
+        title="空池策略",
+        description="用于确认空结果也会入库",
+        rules={
+            "require_last_second_price_up": True,
+            "recent_limit_up_days": 3,
+            "min_open_gap_pct": -2,
+            "min_pattern_days": 0,
+            "min_board_count": 0,
+            "sort_by": "days_boards",
+        },
+    )
+
+    class _FlatAuction(_AuctionProvider):
+        def scan(self, symbols: list[str], *, trade_date: str):
+            scan = super().scan(symbols, trade_date=trade_date)
+            observation = scan.observations["000802.SZ"]
+            scan.observations["000802.SZ"] = AuctionSnatchObservation(
+                symbol=observation.symbol,
+                open_price=observation.open_price,
+                open_change_pct=observation.open_change_pct,
+                open_volume=observation.open_volume,
+                open_amount=observation.open_amount,
+                previous_price=observation.open_price,
+                previous_time=observation.previous_time,
+                last_second_pct=0,
+            )
+            return scan
+
+    result = manager.run(
+        "personal_strategy_1",
+        _CandidateProvider(),
+        _FlatAuction(),
+        trade_date="2026-08-14",
+        data_dir=tmp_path / "data",
+        exact_conditions=[],
+    )
+    assert result.items == []
+    stored = StrategyHistoryStore(tmp_path / "data").load_latest(
+        "personal_strategy_1", "2026-08-14"
+    )
+    assert stored is not None
+    assert stored.items == []
 
 
 def test_parse_exact_conditions_distinguishes_default_and_empty_selection() -> None:

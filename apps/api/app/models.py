@@ -1391,6 +1391,7 @@ class AuctionSnapshotItem(BaseModel):
     valid_raise_count: int | None = None
     previous_auction_volume: float | None = None
     auction_volume_ratio: float | None = None
+    close_price: float | None = None
 
 
 class AuctionSnapshotResponse(BaseModel):

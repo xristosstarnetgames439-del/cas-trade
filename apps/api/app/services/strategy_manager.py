@@ -8,6 +8,7 @@ from types import ModuleType
 
 from app.models import AuctionSnapshotResponse
 from app.services.auction_snatch import AuctionSnatchProvider
+from app.services.strategy_history_store import StrategyHistoryStore
 from app.services.strategy_result_store import StrategyResultStore
 
 _STRATEGY_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_]{2,63}$")
@@ -90,11 +91,9 @@ class StrategyManager:
             index >= len(configured_exact) for index in exact_conditions
         ):
             raise ValueError("精确筛选条件不存在")
-        store = StrategyResultStore(
-            data_dir,
-            strategy_id=strategy_id,
-            version=int(metadata.get("version", 1)),
-        )
+        version = int(metadata.get("version", 1))
+        store = StrategyResultStore(data_dir, strategy_id=strategy_id, version=version)
+        history = StrategyHistoryStore(data_dir)
         if not refresh and exact_conditions is None:
             stored = store.load(trade_date)
             if stored is not None:
@@ -111,6 +110,12 @@ class StrategyManager:
         )
         if exact_conditions is None:
             store.save(result)
+        history.save(
+            strategy_id=strategy_id,
+            strategy_version=version,
+            snapshot=result,
+            exact_conditions=exact_conditions,
+        )
         return result
 
     def _path(self, strategy_id: str) -> Path:

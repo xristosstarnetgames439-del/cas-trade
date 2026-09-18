@@ -518,6 +518,7 @@ export type AuctionSnapshotItem = {
   valid_raise_count?: number | null;
   previous_auction_volume?: number | null;
   auction_volume_ratio?: number | null;
+  close_price?: number | null;
 };
 
 export type AuctionSnapshotResponse = {
