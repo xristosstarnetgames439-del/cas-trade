@@ -1,5 +1,5 @@
 .DS_Store
-StockMaster.app/
+StockMaster.app/Contents/Resources/repo_path
 .env
 .env.local
 .venv/

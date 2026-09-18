@@ -47,6 +47,27 @@ stop_docker() {
   fi
 }
 
+install_macos_app() {
+  local src="$ROOT/StockMaster.app"
+  local dest="$HOME/Applications/StockMaster.app"
+  local marker="$dest/Contents/Resources/repo_path"
+  if [ ! -d "$src/Contents" ]; then
+    return 0
+  fi
+  if [ -x "$dest/Contents/MacOS/StockMaster" ] && [ -f "$marker" ] && [ "$(tr -d '\n' < "$marker")" = "$ROOT" ]; then
+    return 0
+  fi
+  mkdir -p "$HOME/Applications"
+  rm -rf "$dest"
+  if command -v ditto >/dev/null 2>&1; then
+    ditto "$src" "$dest"
+  else
+    cp -R "$src" "$dest"
+  fi
+  printf '%s\n' "$ROOT" > "$marker"
+  info "已安装到启动台: $dest"
+}
+
 wait_http() {
   local url="$1" timeout="${2:-90}" attempt=1
   while [ "$attempt" -le "$timeout" ]; do
@@ -68,6 +89,12 @@ start() {
     pnpm_cmd=""
   }
 
+  install_macos_app
+  if [ -n "$(port_pid "$WEB_PORT")" ] && [ -n "$(port_pid "$API_PORT")" ]; then
+    info "服务已在运行，打开 ${AUTH_URL}"
+    open "$AUTH_URL" 2>/dev/null || true
+    return 0
+  fi
   stop_docker
   free_port "$WEB_PORT"
   free_port "$API_PORT"

@@ -47,6 +47,12 @@ StockMaster 是一个面向 A 股短线交易者的私有化工作台。它把�
 - `/stock/{symbol}`：个股详情，例如 `/stock/300922.SZ`
 - `/settings`：数据源、通知和运行状态
 
+## macOS 启动
+
+仓库根目录带有 `StockMaster.app`。clone 后双击它，或运行 `scripts/stockmaster.sh start`。首次启动会把应用复制到 `~/Applications/StockMaster.app`，启动台即可看到图标。
+
+停止：`scripts/StockMaster-stop.command` 或 `scripts/stockmaster.sh stop`。
+
 ## 推荐部署：Docker 单容器
 
 Docker Hub 镜像：

@@ -1,0 +1,25 @@
+#!/bin/bash
+set -euo pipefail
+
+APP_BUNDLE="$(cd "$(dirname "$0")/../.." && pwd)"
+REPO_FILE="$APP_BUNDLE/Contents/Resources/repo_path"
+if [ -f "$REPO_FILE" ]; then
+  ROOT="$(tr -d '\n' < "$REPO_FILE")"
+else
+  ROOT="$(cd "$APP_BUNDLE/.." && pwd)"
+fi
+
+SCRIPT="$ROOT/scripts/stockmaster.sh"
+if [ ! -f "$SCRIPT" ]; then
+  osascript -e 'display dialog "找不到 StockMaster 仓库。请先 clone cas-trade，再双击仓库里的 StockMaster.app。" buttons {"好"} default button 1' >/dev/null
+  exit 1
+fi
+
+ROOT_Q=$(printf '%q' "$ROOT")
+# 先 do script 再 activate：若先 activate，Terminal 会先弹出空窗口，再另开一个跑命令。
+osascript <<EOF
+tell application "Terminal"
+  do script "cd ${ROOT_Q} && exec ./scripts/stockmaster.sh start"
+  activate
+end tell
+EOF
