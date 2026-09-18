@@ -2,7 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from app.providers.eltdx_auction import _count_valid_raises, _eltdx_code, _load_observation
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from app.providers.eltdx_auction import (
+    _count_valid_raises,
+    _eltdx_code,
+    _is_live_auction_session,
+    _load_observation,
+)
 
 
 class _Helpers:
@@ -66,6 +74,48 @@ def test_load_observation_uses_last_preopen_virtual_price() -> None:
 
 def test_load_observation_rejects_series_from_another_session() -> None:
     assert _load_observation(_Client(same_session=False), "000802.SZ", "2026-08-14") is None
+
+
+def test_load_observation_uses_historical_minute_records() -> None:
+    class _HistoryHelpers:
+        def auction_data(self, code: str, date: str | None = None, **_kwargs):
+            assert code == "sz000993"
+            if date == "2026-09-17":
+                return SimpleNamespace(snapshot_0925=SimpleNamespace(volume=100000))
+            assert date == "2026-09-18"
+            return SimpleNamespace(
+                trading_date="2026-09-18",
+                snapshot_0925=SimpleNamespace(
+                    price=18.30,
+                    volume=200000,
+                    trade_amount_yuan=36600000,
+                ),
+                pre_close_price=17.97,
+                series=None,
+                auction_records=(
+                    SimpleNamespace(time_minutes=9 * 60 + 24, time_label="09:24", price=17.80),
+                ),
+            )
+
+    class _HistoryClient:
+        helpers = _HistoryHelpers()
+
+    result = _load_observation(_HistoryClient(), "000993.SZ", "2026-09-18", live=False)
+
+    assert result is not None
+    assert result.open_price == 18.30
+    assert result.previous_price == 17.80
+    assert result.previous_time == "09:24"
+    assert result.last_second_pct == 2.809
+    assert result.auction_volume_ratio == 2.0
+
+
+def test_live_auction_session_covers_whole_current_trade_date() -> None:
+    evening = datetime(2026, 9, 18, 18, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert _is_live_auction_session("2026-09-18", now=evening) is True
+    morning = datetime(2026, 9, 18, 9, 26, tzinfo=ZoneInfo("Asia/Shanghai"))
+    assert _is_live_auction_session("2026-09-18", now=morning) is True
+    assert _is_live_auction_session("2026-09-17", now=morning) is False
 
 
 def test_eltdx_code_maps_exchange_suffix() -> None:

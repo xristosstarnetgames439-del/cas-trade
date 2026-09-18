@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from functools import partial
+from zoneinfo import ZoneInfo
 
 from app.models import StrongStockDataUnavailable
 from app.services.auction_snatch import (
@@ -10,10 +12,13 @@ from app.services.auction_snatch import (
 )
 from app.services.trading_calendar import is_open_session
 
+SHANGHAI = ZoneInfo("Asia/Shanghai")
 _AUCTION_START_SECONDS = 9 * 3600 + 20 * 60
 _AUCTION_END_SECONDS = 9 * 3600 + 25 * 60
 _LAST_MOMENT_START_SECONDS = 9 * 3600 + 24 * 60 + 30
+_MINUTE_LAST_MOMENT_START_SECONDS = 9 * 3600 + 24 * 60
 _RAISE_WINDOW_SECONDS = 30
+
 
 
 class EltdxAuctionProvider:
@@ -36,25 +41,35 @@ class EltdxAuctionProvider:
 
         observations: dict[str, AuctionSnatchObservation] = {}
         failed = 0
+        live = _is_live_auction_session(trade_date)
+        worker = partial(_load_observation, live=live)
+        workers = min(self.workers if live else min(self.workers, 4), len(unique_symbols))
+        per_stock_timeout = self.timeout_seconds + (10 if live else 40)
+        overall_timeout = per_stock_timeout * ((len(unique_symbols) + workers - 1) // workers) + 30
         with TdxClient(
-            timeout=self.timeout_seconds,
-            pool_size=min(self.workers, len(unique_symbols)),
+            timeout=self.timeout_seconds if live else max(self.timeout_seconds, 20),
+            pool_size=workers,
             probe_hosts=True,
         ) as client:
-            with ThreadPoolExecutor(max_workers=min(self.workers, len(unique_symbols))) as executor:
+            executor = ThreadPoolExecutor(max_workers=workers)
+            try:
                 futures = {
-                    executor.submit(_load_observation, client, symbol, trade_date): symbol
+                    executor.submit(worker, client, symbol, trade_date): symbol
                     for symbol in unique_symbols
                 }
-                for future in as_completed(futures):
+                for future in as_completed(futures, timeout=overall_timeout):
                     symbol = futures[future]
                     try:
-                        observation = future.result()
+                        observation = future.result(timeout=per_stock_timeout)
                     except Exception:
                         failed += 1
                         continue
                     if observation is not None:
                         observations[symbol] = observation
+            except TimeoutError:
+                failed += sum(1 for future in futures if not future.done())
+            finally:
+                executor.shutdown(wait=False, cancel_futures=True)
         return AuctionSnatchScan(
             observations=observations,
             attempted=len(unique_symbols),
@@ -63,30 +78,56 @@ class EltdxAuctionProvider:
 
 
 def _load_observation(
-    client: object, symbol: str, trade_date: str
+    client: object, symbol: str, trade_date: str, *, live: bool = True
 ) -> AuctionSnatchObservation | None:
     code = _eltdx_code(symbol)
-    auction = client.helpers.auction_data(code)
-    if str(getattr(auction, "trading_date", "")) != trade_date:
-        # 秒级竞价序列只保存主站当前交易日，不得拿其他日期的数据冒充。
+    if live:
+        auction = client.helpers.auction_data(code)
+        if not _same_trade_date(getattr(auction, "trading_date", None), trade_date):
+            # 秒级竞价序列只保存主站当前交易日，不得拿其他日期的数据冒充。
+            return None
+        observation = _observation_from_auction(
+            client, symbol, code, trade_date, auction
+        )
+        if observation is not None:
+            return observation
+    return _observation_from_auction(
+        client,
+        symbol,
+        code,
+        trade_date,
+        client.helpers.auction_data(code, trade_date),
+    )
+
+
+def _observation_from_auction(
+    client: object, symbol: str, code: str, trade_date: str, auction: object
+) -> AuctionSnatchObservation | None:
+    if not _same_trade_date(getattr(auction, "trading_date", None), trade_date):
         return None
     current_match = getattr(auction, "snapshot_0925", None)
     if current_match is None:
         return None
 
-    series = getattr(auction, "series", None)
-    all_points = sorted(
-        getattr(series, "points", ()),
-        key=lambda point: point.time_seconds,
+    all_points, minute_resolution = _auction_points(auction)
+    all_points = sorted(all_points, key=_point_time_seconds)
+    tail_start = (
+        _MINUTE_LAST_MOMENT_START_SECONDS if minute_resolution else _LAST_MOMENT_START_SECONDS
     )
     points = [
         point
         for point in all_points
-        if _LAST_MOMENT_START_SECONDS <= point.time_seconds < _AUCTION_END_SECONDS
+        if tail_start <= _point_time_seconds(point) < _AUCTION_END_SECONDS
     ]
+    if not points and minute_resolution:
+        points = [
+            point
+            for point in all_points
+            if _AUCTION_START_SECONDS <= _point_time_seconds(point) < _AUCTION_END_SECONDS
+        ]
     if not points:
         return None
-    previous = max(points, key=lambda point: point.time_seconds)
+    previous = max(points, key=_point_time_seconds)
     open_price = float(current_match.price)
     previous_price = float(previous.price)
     if open_price <= 0 or previous_price <= 0:
@@ -104,6 +145,7 @@ def _load_observation(
         if current_match.volume is not None and previous_open_volume not in (None, 0)
         else None
     )
+    previous_time = getattr(previous, "time_label", None) or ""
     return AuctionSnatchObservation(
         symbol=symbol,
         open_price=open_price,
@@ -111,7 +153,7 @@ def _load_observation(
         open_volume=float(current_match.volume) if current_match.volume is not None else None,
         open_amount=round(float(current_match.trade_amount_yuan), 2),
         previous_price=previous_price,
-        previous_time=previous.time_label,
+        previous_time=previous_time,
         last_second_pct=round((open_price - previous_price) / previous_price * 100, 4),
         valid_raise_count=_count_valid_raises(all_points, open_price=open_price),
         previous_open_volume=previous_open_volume,
@@ -124,9 +166,9 @@ def _load_observation(
 def _count_valid_raises(points: list[object], *, open_price: float | None = None) -> int:
     """09:20-09:25 抬价事件：30 秒内跌破节点作废，再抬确认上次并重启；含 09:25 撮合。"""
     series = [
-        (int(point.time_seconds), float(point.price))
+        (_point_time_seconds(point), float(point.price))
         for point in points
-        if _AUCTION_START_SECONDS <= int(point.time_seconds) < _AUCTION_END_SECONDS
+        if _AUCTION_START_SECONDS <= _point_time_seconds(point) < _AUCTION_END_SECONDS
         and float(point.price) > 0
     ]
     if open_price is not None and open_price > 0:
@@ -167,6 +209,44 @@ def _count_valid_raises(points: list[object], *, open_price: float | None = None
     if pending_price is not None:
         count += 1
     return count
+
+
+def _is_live_auction_session(trade_date: str, now: datetime | None = None) -> bool:
+    current = now or datetime.now(SHANGHAI)
+    if current.tzinfo is None:
+        current = current.replace(tzinfo=SHANGHAI)
+    else:
+        current = current.astimezone(SHANGHAI)
+    # 通达信当日秒级竞价会保留到下一个交易日切换前，收盘后仍应走 live，不能改历史成交。
+    return current.date().isoformat() == trade_date
+
+
+def _same_trade_date(value: object, trade_date: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    if len(text) >= 10 and text[4] == "-":
+        return text[:10] == trade_date
+    compact = trade_date.replace("-", "")
+    return text.replace("-", "")[:8] == compact
+
+
+def _auction_points(auction: object) -> tuple[list[object], bool]:
+    series = getattr(auction, "series", None)
+    points = list(getattr(series, "points", ()) or ())
+    if points:
+        return points, False
+    return list(getattr(auction, "auction_records", ()) or ()), True
+
+
+def _point_time_seconds(point: object) -> int:
+    seconds = getattr(point, "time_seconds", None)
+    if seconds is not None:
+        return int(seconds)
+    minutes = getattr(point, "time_minutes", None)
+    if minutes is not None:
+        return int(minutes) * 60
+    return -1
 
 
 def _previous_open_volume(client: object, code: str, trade_date: str) -> float | None:
