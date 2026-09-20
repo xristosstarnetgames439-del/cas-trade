@@ -203,6 +203,9 @@ def _industry(row: dict[str, object]) -> str | None:
 
 def _board_note(dates: list[str], latest_row: dict[str, object]) -> str:
     notes = [f"涨停日期: {','.join(dates)}"]
+    high_days = latest_row.get("high_days")
+    if high_days not in (None, ""):
+        notes.append(f"同花顺几天几板: {high_days}")
     for key in ("涨停统计", "连板数", "炸板次数", "首次封板时间", "最后封板时间"):
         value = latest_row.get(key)
         if value not in (None, ""):

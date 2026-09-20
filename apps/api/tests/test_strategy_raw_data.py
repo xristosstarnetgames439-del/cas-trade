@@ -130,6 +130,38 @@ def test_local_candidates_only_use_previous_sessions(tmp_path) -> None:
     assert "20260814" not in candidates[0].board_note
 
 
+def test_local_candidates_keep_downloaded_ths_high_days(tmp_path) -> None:
+    store = StrategyRawStore(tmp_path)
+    for trade_date in ("2026-09-15", "2026-09-16"):
+        store.save_pool(trade_date, [], source="同花顺涨停揭秘")
+    store.save_pool(
+        "2026-09-17",
+        [{"code": "603248", "name": "锡华科技", "high_days": "3天3板"}],
+        source="同花顺涨停揭秘",
+    )
+
+    candidates = LocalStrategyCandidateProvider(store, lookback_days=3).get_candidates("20260918")
+
+    assert [candidate.symbol for candidate in candidates] == ["603248.SH"]
+    assert "同花顺几天几板: 3天3板" in (candidates[0].board_note or "")
+
+
+def test_raw_store_replaces_pool_from_another_source(tmp_path) -> None:
+    store = StrategyRawStore(tmp_path)
+    assert store.save_pool("2026-09-18", [{"代码": "603248", "名称": "锡华科技"}])
+
+    assert store.save_pool(
+        "2026-09-18",
+        [{"code": "603248", "name": "锡华科技", "high_days": "4天4板"}],
+        source="同花顺涨停揭秘",
+    )
+
+    payload = store.load_pool("2026-09-18")
+    assert payload is not None
+    assert payload["source"] == "同花顺涨停揭秘"
+    assert payload["rows"][0]["high_days"] == "4天4板"
+
+
 def test_three_month_period_uses_natural_months_and_last_completed_session() -> None:
     dates = strategy_download_dates(
         "three_months",

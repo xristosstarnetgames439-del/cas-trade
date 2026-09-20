@@ -12,10 +12,10 @@ from zoneinfo import ZoneInfo
 
 from app.models import KlineBar, StrongStockCandidate, StrongStockDataUnavailable
 from app.providers.recent_limit_up_candidates import (
-    RecentLimitUpCandidateProvider,
     _fetch_pool_rows,
     parse_recent_limit_up_rows,
 )
+from app.providers.ths_limit_up_pool import THS_LIMIT_UP_POOL_SOURCE, fetch_ths_limit_up_pool
 from app.services.auction_snatch import AuctionSnatchObservation, AuctionSnatchScan
 from app.services.trading_calendar import is_open_session, previous_open_session
 
@@ -51,16 +51,23 @@ class StrategyRawStore:
     def load_pool(self, trade_date: str) -> dict[str, object] | None:
         return _read_json(self.pool_path(trade_date), trade_date=trade_date)
 
-    def save_pool(self, trade_date: str, rows: list[dict[str, object]]) -> bool:
+    def save_pool(
+        self,
+        trade_date: str,
+        rows: list[dict[str, object]],
+        *,
+        source: str = "AKShare 东方财富涨停池",
+    ) -> bool:
         path = self.pool_path(trade_date)
-        if self.load_pool(trade_date) is not None:
+        existing = self.load_pool(trade_date)
+        if existing is not None and existing.get("source") == source:
             return False
         _atomic_json(
             path,
             {
                 "schema_version": SCHEMA_VERSION,
                 "trade_date": trade_date,
-                "source": "AKShare 东方财富涨停池",
+                "source": source,
                 "captured_at": _now(),
                 "rows": rows,
             },
@@ -266,6 +273,7 @@ def run_strategy_raw_download(
     progress: ProgressCallback,
     should_cancel: CancelCheck,
     pool_fetcher: Callable[[str], list[dict[str, object]]] | None = None,
+    pool_source: str = THS_LIMIT_UP_POOL_SOURCE,
     auction_provider_factory: Callable[[StrategyRawStore], object] | None = None,
     kline_provider: object | None = None,
     now: datetime | None = None,
@@ -275,10 +283,7 @@ def run_strategy_raw_download(
         raise StrongStockDataUnavailable("所选区间没有已完成交易日")
     store = StrategyRawStore(data_dir)
     if pool_fetcher is None:
-        provider = RecentLimitUpCandidateProvider.from_akshare()
-        if provider.pool_fetcher is None:
-            raise StrongStockDataUnavailable("AKShare 未安装，无法下载历史涨停池")
-        pool_fetcher = provider.pool_fetcher
+        pool_fetcher = fetch_ths_limit_up_pool
     if auction_provider_factory is None:
         from app.providers.eltdx_auction import EltdxAuctionProvider
 
@@ -308,10 +313,11 @@ def run_strategy_raw_download(
             pool_dates = [trade_day, *_previous_open_dates(trade_day, lookback_days)]
             for pool_day in pool_dates:
                 pool_date = pool_day.isoformat()
-                if store.load_pool(pool_date) is not None:
+                existing_pool = store.load_pool(pool_date)
+                if existing_pool is not None and existing_pool.get("source") == pool_source:
                     continue
                 rows = _fetch_pool_rows(pool_fetcher, pool_day.strftime("%Y%m%d"))
-                downloaded_pools += int(store.save_pool(pool_date, rows))
+                downloaded_pools += int(store.save_pool(pool_date, rows, source=pool_source))
             candidates = LocalStrategyCandidateProvider(
                 store, lookback_days=lookback_days
             ).get_candidates(trade_date.replace("-", ""))

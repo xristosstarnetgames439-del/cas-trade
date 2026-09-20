@@ -12,6 +12,7 @@ from app.services.auction_snatch import (
 from app.services.auction_strategy_runtime import (
     _board_stats,
     _break_days,
+    _downloaded_board_stats,
     _sort_key,
     _strategy_item,
     recent_limit_up_candidates,
@@ -368,6 +369,42 @@ def test_board_stats_excludes_auction_day_and_counts_trailing_break() -> None:
         "20260917,20260916,20260915,20260914,20260911,20260910,20260909,20260908,20260907,20260904,20260903",
     )
     assert _board_stats(eleven_boards, trade_date="2026-09-18") == (10, 10)
+
+
+def test_downloaded_board_stats_uses_ths_high_days_only_when_present() -> None:
+    downloaded = StrongStockCandidate(
+        symbol="603626.SH",
+        name="科森科技",
+        board_note="涨停日期: 20260918,20260917; 同花顺几天几板: 5天3板",
+    )
+    live = StrongStockCandidate(
+        symbol="603626.SH",
+        name="科森科技",
+        board_note="涨停日期: 20260918,20260917",
+    )
+
+    assert _downloaded_board_stats(downloaded) == (5, 3)
+    assert _downloaded_board_stats(live) is None
+    assert _downloaded_board_stats(
+        downloaded.model_copy(update={"board_note": "同花顺几天几板: 首板"})
+    ) == (1, 1)
+
+    item = _strategy_item(
+        downloaded,
+        AuctionSnatchObservation(
+            symbol=downloaded.symbol,
+            open_price=10,
+            open_change_pct=1,
+            open_volume=100,
+            open_amount=1000,
+            previous_price=9.9,
+            previous_time="09:24:57",
+            last_second_pct=1.01,
+        ),
+        trade_date="2026-09-21",
+        recent_days=3,
+    )
+    assert item.limit_up_pattern == "5天3板"
 
 
 def test_break_days_uses_latest_real_limit_up_date_before_auction() -> None:

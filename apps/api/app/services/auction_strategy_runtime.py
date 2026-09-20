@@ -165,7 +165,8 @@ def _strategy_item(
         candidate.name,
         trade_date=trade_date,
     )
-    pattern_days, board_count = _board_stats(
+    downloaded_stats = _downloaded_board_stats(candidate)
+    pattern_days, board_count = downloaded_stats or _board_stats(
         candidate, trade_date=trade_date, extra_dates=extra_dates
     )
     pattern = f"{pattern_days}天{board_count}板" if pattern_days and board_count else None
@@ -237,6 +238,20 @@ def _board_stats(
     window = previous_days[: start_index + 1]
     boards = sum(1 for day in window if day in limit_up_dates)
     return len(window), boards
+
+
+def _downloaded_board_stats(candidate: StrongStockCandidate) -> tuple[int, int] | None:
+    """历史下载使用同花顺口径；当天实时候选没有此字段，继续走原算法。"""
+    match = re.search(r"同花顺几天几板\s*[:：]\s*([^;；]+)", candidate.board_note or "")
+    if match is None:
+        return None
+    pattern = match.group(1).strip()
+    if pattern == "首板":
+        return 1, 1
+    parsed = re.fullmatch(r"(\d+)天(\d+)板", pattern)
+    if parsed is None:
+        return None
+    return int(parsed.group(1)), int(parsed.group(2))
 
 
 def _candidate_limit_up_dates(candidate: StrongStockCandidate) -> set[str]:
