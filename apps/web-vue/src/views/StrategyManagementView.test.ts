@@ -7,8 +7,11 @@ import type { AuctionSnapshotResponse, StrategyDefinition } from '@/service/type
 import StrategyManagementView from './StrategyManagementView.vue';
 
 const api = vi.hoisted(() => ({
+  cancelStrategyRawDownload: vi.fn(),
   createStrategy: vi.fn(),
+  createStrategyRawDownload: vi.fn(),
   getStrategies: vi.fn(),
+  getStrategyRawDownload: vi.fn(),
   getStrategyRun: vi.fn(),
   runStrategy: vi.fn()
 }));
@@ -84,6 +87,7 @@ const SNAPSHOT: AuctionSnapshotResponse = {
       last_second_pct: 2.81,
       prev_node_price: 17.8,
       prev_node_time: '2026-09-18T09:24:57',
+      limit_up_3d: true,
       close_price: 18.3
     }
   ],
@@ -123,7 +127,12 @@ function mountView() {
         AInput: true,
         AInputNumber: true,
         AModal: true,
-        ASelect: true,
+        AProgress: true,
+        ASelect: defineComponent({
+          props: ['value', 'options', 'disabled'],
+          emits: ['update:value'],
+          template: '<select :disabled="disabled"><option v-for="item in options" :key="item.value" :value="item.value">{{ item.label }}</option></select>'
+        }),
         ASwitch: true,
         ATag: true,
         ATextarea: true,
@@ -207,5 +216,29 @@ describe('StrategyManagementView', () => {
     finishRun?.(SNAPSHOT);
     await flushPromises();
     expect(wrapper.text()).toContain('闽东电力');
+  });
+
+  it('starts a resumable history download for the active strategy', async () => {
+    api.createStrategyRawDownload.mockResolvedValue({
+      job_id: 'raw-job-1',
+      type: 'strategy_raw_download',
+      status: 'success',
+      progress_current: 12,
+      progress_total: 12,
+      message: '竞价抢筹历史数据下载完成',
+      started_at: null,
+      finished_at: null,
+      error: null,
+      result_path: null,
+      result: { trading_days: 12 }
+    });
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('.strategy-card').trigger('click');
+    await wrapper.get('[data-testid="strategy-download-button"]').trigger('click');
+    await flushPromises();
+
+    expect(api.createStrategyRawDownload).toHaveBeenCalledWith('auction_snatch', 'month');
+    expect(wrapper.text()).toContain('竞价抢筹历史数据下载完成');
   });
 });

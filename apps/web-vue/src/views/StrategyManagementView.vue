@@ -1,9 +1,24 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import dayjs from 'dayjs';
-import { createStrategy, getStrategies, getStrategyRun, runStrategy } from '@/service/product-api';
-import type { AuctionSnapshotItem, AuctionSnapshotResponse, StrategyCreateRequest, StrategyDefinition } from '@/service/types';
+import {
+  cancelStrategyRawDownload,
+  createStrategy,
+  createStrategyRawDownload,
+  getStrategies,
+  getStrategyRawDownload,
+  getStrategyRun,
+  runStrategy
+} from '@/service/product-api';
+import type {
+  AuctionSnapshotItem,
+  AuctionSnapshotResponse,
+  BackgroundJobState,
+  StrategyCreateRequest,
+  StrategyDefinition,
+  StrategyRawPeriod
+} from '@/service/types';
 import { useTradeDate } from '@/composables/useTradeDate';
 import { formatWorkbenchNumber } from '@/components/common/workbench/workbench';
 
@@ -20,7 +35,18 @@ const createOpen = ref(false);
 const creating = ref(false);
 const selectedExactFilterSlots = ref<number[]>([]);
 const storedRun = ref<AuctionSnapshotResponse | null>(null);
+const downloadPeriod = ref<StrategyRawPeriod>('month');
+const downloadJob = ref<BackgroundJobState | null>(null);
+const downloadError = ref<string | null>(null);
+let downloadPollTimer: ReturnType<typeof setTimeout> | null = null;
 const hasStoredRun = computed(() => storedRun.value !== null);
+const downloadRunning = computed(() => downloadJob.value?.status === 'pending' || downloadJob.value?.status === 'running');
+const downloadProgress = computed(() => {
+  if (downloadJob.value?.status === 'success') return 100;
+  const current = downloadJob.value?.progress_current ?? 0;
+  const total = downloadJob.value?.progress_total ?? 0;
+  return total > 0 ? Math.round((current / total) * 100) : 0;
+});
 let probeSeq = 0;
 const form = reactive<StrategyCreateRequest>({
   title: '',
@@ -89,7 +115,8 @@ async function probeStored() {
     storedRun.value = null;
     return;
   }
-  const seq = ++probeSeq;
+  probeSeq += 1;
+  const seq = probeSeq;
   const date = tradeDate.value;
   try {
     const snapshot = await getStrategyRun(strategy.id, date);
@@ -158,7 +185,7 @@ function handleDateChange(value: string) {
 }
 
 watch([tradeDate, activeStrategy], () => {
-  void probeStored();
+  probeStored();
 });
 
 function disableNonTradingDate(current: dayjs.Dayjs) {
@@ -172,7 +199,60 @@ function openStock(item: AuctionSnapshotItem) {
   });
 }
 
+async function startDownload() {
+  if (!activeStrategy.value || downloadRunning.value) return;
+  const strategyId = activeStrategy.value.id;
+  downloadError.value = null;
+  try {
+    downloadJob.value = await createStrategyRawDownload(strategyId, downloadPeriod.value);
+    if (!isTerminalJob(downloadJob.value)) scheduleDownloadPoll(strategyId, downloadJob.value.job_id);
+  } catch (cause) {
+    downloadError.value = cause instanceof Error ? cause.message : '启动历史数据下载失败';
+  }
+}
+
+function scheduleDownloadPoll(strategyId: string, jobId: string) {
+  stopDownloadPoll();
+  downloadPollTimer = setTimeout(() => {
+    downloadPollTimer = null;
+    pollDownload(strategyId, jobId);
+  }, 1000);
+}
+
+async function pollDownload(strategyId: string, jobId: string) {
+  try {
+    const job = await getStrategyRawDownload(strategyId, jobId);
+    if (downloadJob.value?.job_id !== jobId) return;
+    downloadJob.value = job;
+    if (!isTerminalJob(job)) scheduleDownloadPoll(strategyId, jobId);
+    if (job.status === 'failed') downloadError.value = job.error || job.message;
+  } catch (cause) {
+    downloadError.value = cause instanceof Error ? cause.message : '读取历史数据下载进度失败';
+  }
+}
+
+async function cancelDownload() {
+  if (!activeStrategy.value || !downloadJob.value || !downloadRunning.value) return;
+  try {
+    downloadJob.value = await cancelStrategyRawDownload(activeStrategy.value.id, downloadJob.value.job_id);
+  } catch (cause) {
+    downloadError.value = cause instanceof Error ? cause.message : '取消历史数据下载失败';
+  }
+}
+
+function isTerminalJob(job: BackgroundJobState) {
+  return job.status === 'success' || job.status === 'failed' || job.status === 'canceled';
+}
+
+function stopDownloadPoll() {
+  if (downloadPollTimer !== null) {
+    clearTimeout(downloadPollTimer);
+    downloadPollTimer = null;
+  }
+}
+
 onMounted(loadStrategies);
+onUnmounted(stopDownloadPoll);
 </script>
 
 <template>
@@ -187,6 +267,25 @@ onMounted(loadStrategies);
         :disabled-date="disableNonTradingDate"
         @change="(_, value) => handleDateChange(String(value))"
       />
+      <a-select
+        v-if="activeStrategy"
+        v-model:value="downloadPeriod"
+        class="download-period"
+        :disabled="downloadRunning"
+        :options="[
+          { label: '本月', value: 'month' },
+          { label: '近三月', value: 'three_months' },
+          { label: '本年', value: 'year' }
+        ]"
+      />
+      <a-button
+        v-if="activeStrategy"
+        data-testid="strategy-download-button"
+        :loading="downloadRunning"
+        @click="startDownload"
+      >
+        下载历史数据
+      </a-button>
       <a-button v-if="!activeStrategy" type="primary" @click="createOpen = true">新增策略</a-button>
     </PageHeader>
 
@@ -215,6 +314,18 @@ onMounted(loadStrategies);
     </section>
 
     <section v-else class="strategy-detail border border-border rounded-6px bg-container p-12px">
+      <a-alert
+        class="mb-10px"
+        message="历史策略只读取本地文件；没有秒级竞价时不能计算有效抬价，系统不会自动放宽条件。"
+        show-icon
+        type="info"
+      />
+      <a-alert v-if="downloadError" class="mb-10px" :message="downloadError" show-icon type="error" />
+      <div v-if="downloadJob" class="download-progress">
+        <a-progress :percent="downloadProgress" size="small" />
+        <span>{{ downloadJob.message }}</span>
+        <a-button v-if="downloadRunning" size="small" danger @click="cancelDownload">取消</a-button>
+      </div>
       <div class="strategy-detail-header">
         <a-button @click="backToStrategies">← 返回总列表</a-button>
         <h2>{{ activeStrategy.title }}</h2>
@@ -323,6 +434,20 @@ onMounted(loadStrategies);
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 12px;
+}
+
+.download-period {
+  width: 108px;
+}
+
+.download-progress {
+  display: grid;
+  grid-template-columns: minmax(180px, 320px) 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: var(--text-color-2, #64748b);
+  font-size: 12px;
 }
 
 .strategy-card {
@@ -462,7 +587,8 @@ onMounted(loadStrategies);
   }
 
   .result-row,
-  .rule-grid {
+  .rule-grid,
+  .download-progress {
     grid-template-columns: 1fr;
   }
 }

@@ -88,6 +88,7 @@ import type {
   StockResearchResponse,
   StrategyCreateRequest,
   StrategyDefinition,
+  StrategyRawPeriod,
   StrongStockIntradaySnapshot,
   StrongStockScreeningResponse,
   SystemCacheClearResponse,
@@ -321,6 +322,38 @@ export async function getStrategyRun(
     throw new Error(`读取策略筛选记录失败：${response.status} ${await response.text()}`);
   }
   return response.json() as Promise<AuctionSnapshotResponse>;
+}
+
+export async function createStrategyRawDownload(
+  strategyId: string,
+  period: StrategyRawPeriod
+): Promise<BackgroundJobState> {
+  return apiSend<BackgroundJobState>(
+    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/raw-downloads?period=${encodeURIComponent(period)}`,
+    "启动历史数据下载失败",
+    { method: "POST" },
+  );
+}
+
+export async function getStrategyRawDownload(
+  strategyId: string,
+  jobId: string
+): Promise<BackgroundJobState> {
+  return apiGet<BackgroundJobState>(
+    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/raw-downloads/${encodeURIComponent(jobId)}`,
+    "读取历史数据下载进度失败",
+  );
+}
+
+export async function cancelStrategyRawDownload(
+  strategyId: string,
+  jobId: string
+): Promise<BackgroundJobState> {
+  return apiSend<BackgroundJobState>(
+    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/raw-downloads/${encodeURIComponent(jobId)}/cancel`,
+    "取消历史数据下载失败",
+    { method: "POST" },
+  );
 }
 
 export async function createAuctionModelTop3Job(tradeDate: string): Promise<BackgroundJobState> {

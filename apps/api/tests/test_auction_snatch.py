@@ -171,6 +171,7 @@ class _FakeCandidateProvider:
         return [
             _candidate("000802.SZ", "北京文化", "20260813,20260812,20260811"),
             _candidate("600001.SH", "仅有涨停", "20260813"),
+            _candidate("300001.SZ", "创业板样本", "20260813"),
             _candidate("600002.SH", "无近期涨停", "20260810"),
         ]
 
@@ -361,6 +362,12 @@ def test_board_stats_excludes_auction_day_and_counts_trailing_break() -> None:
     assert _board_stats(
         missing_latest, trade_date="2026-09-18", extra_dates={"20260916"}
     ) == (7, 6)
+    eleven_boards = _candidate(
+        "600001.SH",
+        "十一连板样本",
+        "20260917,20260916,20260915,20260914,20260911,20260910,20260909,20260908,20260907,20260904,20260903",
+    )
+    assert _board_stats(eleven_boards, trade_date="2026-09-18") == (10, 10)
 
 
 def test_break_days_uses_latest_real_limit_up_date_before_auction() -> None:

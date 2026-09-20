@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from functools import partial
+import logging
 from zoneinfo import ZoneInfo
 
 from app.models import StrongStockDataUnavailable
@@ -19,6 +21,8 @@ _LAST_MOMENT_START_SECONDS = 9 * 3600 + 24 * 60 + 30
 _MINUTE_LAST_MOMENT_START_SECONDS = 9 * 3600 + 24 * 60
 _RAISE_WINDOW_SECONDS = 30
 
+logger = logging.getLogger(__name__)
+
 
 
 class EltdxAuctionProvider:
@@ -26,9 +30,18 @@ class EltdxAuctionProvider:
 
     source_name = "eltdx 通达信竞价"
 
-    def __init__(self, *, timeout_seconds: float = 5, workers: int = 8) -> None:
+    def __init__(
+        self,
+        *,
+        timeout_seconds: float = 5,
+        workers: int = 8,
+        archive_store: object | None = None,
+        cancel_check: Callable[[], bool] | None = None,
+    ) -> None:
         self.timeout_seconds = timeout_seconds
         self.workers = max(1, workers)
+        self.archive_store = archive_store
+        self.cancel_check = cancel_check or (lambda: False)
 
     def scan(self, symbols: list[str], *, trade_date: str) -> AuctionSnatchScan:
         unique_symbols = list(dict.fromkeys(symbols))
@@ -42,7 +55,7 @@ class EltdxAuctionProvider:
         observations: dict[str, AuctionSnatchObservation] = {}
         failed = 0
         live = _is_live_auction_session(trade_date)
-        worker = partial(_load_observation, live=live)
+        worker = partial(_load_observation, live=live, archive_store=self.archive_store)
         workers = min(self.workers if live else min(self.workers, 4), len(unique_symbols))
         per_stock_timeout = self.timeout_seconds + (10 if live else 40)
         overall_timeout = per_stock_timeout * ((len(unique_symbols) + workers - 1) // workers) + 30
@@ -58,6 +71,8 @@ class EltdxAuctionProvider:
                     for symbol in unique_symbols
                 }
                 for future in as_completed(futures, timeout=overall_timeout):
+                    if self.cancel_check():
+                        break
                     symbol = futures[future]
                     try:
                         observation = future.result(timeout=per_stock_timeout)
@@ -78,7 +93,12 @@ class EltdxAuctionProvider:
 
 
 def _load_observation(
-    client: object, symbol: str, trade_date: str, *, live: bool = True
+    client: object,
+    symbol: str,
+    trade_date: str,
+    *,
+    live: bool = True,
+    archive_store: object | None = None,
 ) -> AuctionSnatchObservation | None:
     code = _eltdx_code(symbol)
     if live:
@@ -89,15 +109,48 @@ def _load_observation(
         observation = _observation_from_auction(
             client, symbol, code, trade_date, auction
         )
+        _archive_raw_auction(
+            archive_store, client, symbol, code, trade_date, auction, observation
+        )
         if observation is not None:
             return observation
-    return _observation_from_auction(
-        client,
-        symbol,
-        code,
-        trade_date,
-        client.helpers.auction_data(code, trade_date),
+    auction = client.helpers.auction_data(code, trade_date)
+    observation = _observation_from_auction(client, symbol, code, trade_date, auction)
+    _archive_raw_auction(
+        archive_store, client, symbol, code, trade_date, auction, observation
     )
+    return observation
+
+
+def _archive_raw_auction(
+    archive_store: object | None,
+    client: object,
+    symbol: str,
+    code: str,
+    trade_date: str,
+    auction: object,
+    observation: AuctionSnatchObservation | None,
+) -> None:
+    archive = getattr(archive_store, "archive_auction", None)
+    if not callable(archive) or not _same_trade_date(
+        getattr(auction, "trading_date", None), trade_date
+    ):
+        return
+    previous_open_volume = (
+        observation.previous_open_volume
+        if observation is not None
+        else _previous_open_volume(client, code, trade_date)
+    )
+    try:
+        archive(
+            trade_date,
+            symbol,
+            auction,
+            observation,
+            previous_open_volume=previous_open_volume,
+        )
+    except Exception as exc:
+        logger.warning("竞价原始文件写入失败 %s %s: %s", trade_date, symbol, exc)
 
 
 def _observation_from_auction(

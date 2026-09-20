@@ -20,7 +20,7 @@ from app.services.auction_snatch import (
 from app.services.trading_calendar import is_open_session
 
 _DATE_PATTERN = re.compile(r"(?<!\d)(20\d{6})(?!\d)")
-_BOARD_LOOKBACK_DAYS = 40
+_BOARD_LOOKBACK_DAYS = 10
 _MAX_INTERNAL_BREAK_DAYS = 1
 
 ExactMatcher = Callable[[AuctionSnapshotItem, set[int]], bool]
@@ -52,6 +52,11 @@ def run_auction_rules(
         trade_date=trade_date,
         days=recent_days,
     )
+    symbol_prefixes = tuple(str(value) for value in rules.get("symbol_prefixes", []))
+    if symbol_prefixes:
+        candidates = [
+            candidate for candidate in candidates if candidate.symbol.startswith(symbol_prefixes)
+        ]
     scan = auction_provider.scan(
         [candidate.symbol for candidate in candidates],
         trade_date=trade_date,

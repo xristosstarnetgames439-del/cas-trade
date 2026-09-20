@@ -14,9 +14,11 @@ STRATEGY = {
     "description": "寻找集合竞价最后一刻被资金抬价、近期有涨停基础且竞价位置不过低的股票。",
     "conditions": {
         "data": [
+            "仅筛选沪深主板股票（代码以 00、60 开头）",
             "09:25 正式撮合价高于 09:25 前最后一个虚拟竞价价",
             "前 3 个已完成交易日内至少出现过一次涨停",
             "竞价开盘涨幅不低于 -2%",
+            "几天几板最多回看前 10 个交易日",
             "按几天、几板、竞价开盘涨幅依次从高到低排列",
         ]
     },
@@ -25,6 +27,7 @@ STRATEGY = {
             {
                 "label": "09:20-09:25 至少 3 次有效抬价（30秒内跌破节点作废，再抬确认上次；含 09:25 撮合）",
                 "isselect": True,
+                "requires": "seconds",
             },
             {"label": "竞价前断板日最多 1 日", "isselect": True},
             {"label": "今日竞价量大于上一交易日竞价量", "isselect": False},
@@ -34,6 +37,7 @@ STRATEGY = {
     "id": "auction_snatch",
     "rules": {
         "require_last_second_price_up": True,
+        "symbol_prefixes": ["00", "60"],
         "recent_limit_up_days": 3,
         "min_open_gap_pct": -2.0,
         "min_pattern_days": 0,
@@ -41,7 +45,7 @@ STRATEGY = {
         "sort_by": "days_boards",
     },
     "status": "active",
-    "version": 5,
+    "version": 7,
 }
 
 
@@ -61,7 +65,7 @@ def run(
         limit=limit,
         exact_conditions=exact_conditions,
         exact_matcher=_matches_exact,
-        kline_provider=_kline_provider(),
+        kline_provider=getattr(auction_provider, "kline_provider", None) or _kline_provider(),
     )
 
 

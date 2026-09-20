@@ -72,6 +72,32 @@ def test_load_observation_uses_last_preopen_virtual_price() -> None:
     assert result.valid_raise_count == 2
 
 
+def test_load_observation_archives_current_second_series() -> None:
+    archived: list[tuple[str, str, float | None]] = []
+
+    class _ArchiveStore:
+        def archive_auction(
+            self,
+            trade_date,
+            symbol,
+            _auction,
+            _observation,
+            *,
+            previous_open_volume,
+        ):
+            archived.append((trade_date, symbol, previous_open_volume))
+
+    result = _load_observation(
+        _Client(),
+        "000802.SZ",
+        "2026-08-14",
+        archive_store=_ArchiveStore(),
+    )
+
+    assert result is not None
+    assert archived == [("2026-08-14", "000802.SZ", 100000)]
+
+
 def test_load_observation_rejects_series_from_another_session() -> None:
     assert _load_observation(_Client(same_session=False), "000802.SZ", "2026-08-14") is None
 

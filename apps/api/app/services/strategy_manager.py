@@ -32,6 +32,11 @@ class StrategyManager:
             strategies.append(metadata)
         return strategies
 
+    def definition(self, strategy_id: str) -> dict[str, object]:
+        """读取单个策略元数据，供运行时选择数据能力。"""
+        _, metadata = self._load(self._path(strategy_id))
+        return metadata
+
     def create(
         self,
         *,

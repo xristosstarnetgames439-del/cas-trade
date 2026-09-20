@@ -544,10 +544,12 @@ export type StrategyDefinition = {
   description: string;
   // 与后端策略 Python 文件保持同一 data 契约，禁止在页面内另造条件结构。
   conditions: { data: string[] };
-  exact_conditions: { data: Array<{ label: string; isselect: boolean }> };
+  exact_conditions: { data: Array<{ label: string; isselect: boolean; requires?: 'seconds' }> };
   status: 'active' | 'draft';
   version?: number;
 };
+
+export type StrategyRawPeriod = 'month' | 'three_months' | 'year';
 
 export type StrategyCreateRequest = {
   title: string;
