@@ -84,7 +84,7 @@ def run_strategy(
             )
             auction_provider = LocalStrategyAuctionProvider(
                 raw_store,
-                require_preopen=bool(rules.get("require_last_second_price_up", True)),
+                require_preopen=bool({"preopen", "seconds"} & required),
                 require_seconds="seconds" in required,
             )
         else:

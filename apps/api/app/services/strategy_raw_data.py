@@ -478,26 +478,52 @@ def _observation_payload(
 
 def _observation_from_payload(payload: dict[str, object]) -> AuctionSnatchObservation | None:
     raw = payload.get("observation")
-    if not isinstance(raw, dict):
-        return None
     try:
         resolution = str(payload.get("resolution", "match_only"))
+        if isinstance(raw, dict):
+            return AuctionSnatchObservation(
+                symbol=str(raw["symbol"]),
+                open_price=float(raw["open_price"]),
+                open_change_pct=_optional_float(raw.get("open_change_pct")),
+                open_volume=_optional_float(raw.get("open_volume")),
+                open_amount=_optional_float(raw.get("open_amount")),
+                previous_price=float(raw["previous_price"]),
+                previous_time=str(raw["previous_time"]),
+                last_second_pct=float(raw["last_second_pct"]),
+                valid_raise_count=(
+                    int(raw["valid_raise_count"])
+                    if resolution == "seconds" and raw.get("valid_raise_count") is not None
+                    else None
+                ),
+                previous_open_volume=_optional_float(raw.get("previous_open_volume")),
+                auction_volume_ratio=_optional_float(raw.get("auction_volume_ratio")),
+            )
+        snapshot = payload.get("snapshot_0925")
+        if not isinstance(snapshot, dict):
+            return None
+        open_price = float(snapshot["price"])
+        pre_close = _optional_float(payload.get("pre_close_price"))
+        open_volume = _optional_float(snapshot.get("volume"))
+        previous_volume = _optional_float(payload.get("previous_open_volume"))
         return AuctionSnatchObservation(
-            symbol=str(raw["symbol"]),
-            open_price=float(raw["open_price"]),
-            open_change_pct=_optional_float(raw.get("open_change_pct")),
-            open_volume=_optional_float(raw.get("open_volume")),
-            open_amount=_optional_float(raw.get("open_amount")),
-            previous_price=float(raw["previous_price"]),
-            previous_time=str(raw["previous_time"]),
-            last_second_pct=float(raw["last_second_pct"]),
-            valid_raise_count=(
-                int(raw["valid_raise_count"])
-                if resolution == "seconds" and raw.get("valid_raise_count") is not None
+            symbol=str(payload["symbol"]),
+            open_price=open_price,
+            open_change_pct=(
+                round((open_price - pre_close) / pre_close * 100, 4)
+                if pre_close not in (None, 0)
                 else None
             ),
-            previous_open_volume=_optional_float(raw.get("previous_open_volume")),
-            auction_volume_ratio=_optional_float(raw.get("auction_volume_ratio")),
+            open_volume=open_volume,
+            open_amount=_optional_float(snapshot.get("trade_amount_yuan")),
+            previous_price=None,
+            previous_time="",
+            last_second_pct=None,
+            previous_open_volume=previous_volume,
+            auction_volume_ratio=(
+                round(open_volume / previous_volume, 4)
+                if open_volume is not None and previous_volume not in (None, 0)
+                else None
+            ),
         )
     except (KeyError, TypeError, ValueError):
         return None

@@ -13,6 +13,7 @@ from app.services.auction_strategy_runtime import (
     _board_stats,
     _break_days,
     _downloaded_board_stats,
+    _matches,
     _sort_key,
     _strategy_item,
     recent_limit_up_candidates,
@@ -339,6 +340,18 @@ def test_exact_conditions_apply_independently_at_boundaries() -> None:
         _matches_exact(qualified.model_copy(update={"auction_volume_ratio": 0.5999}), {3}) is False
     )
     assert _matches_exact(qualified.model_copy(update={"auction_volume_ratio": 0.1}), set()) is True
+
+
+def test_historical_match_only_item_can_use_available_rules() -> None:
+    item = AuctionSnapshotItem(
+        symbol="000802.SZ",
+        open_gap_pct=1.2,
+        last_second_price_up=None,
+        auction_volume_ratio=0.8,
+    )
+
+    assert _matches(item, {"require_last_second_price_up": True, "min_open_gap_pct": -2})
+    assert _matches_exact(item, {3})
 
 
 def test_board_stats_excludes_auction_day_and_counts_trailing_break() -> None:

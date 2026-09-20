@@ -119,6 +119,38 @@ def test_local_history_reports_missing_second_resolution(tmp_path) -> None:
         )
 
 
+def test_local_history_uses_match_only_price_and_volume_when_path_is_not_required(
+    tmp_path,
+) -> None:
+    store = StrategyRawStore(tmp_path)
+    trade_date = "2026-08-14"
+    store.archive_auction(
+        trade_date,
+        "000802.SZ",
+        SimpleNamespace(
+            snapshot_0925=SimpleNamespace(price=6.2, volume=200, trade_amount_yuan=1240),
+            pre_close_price=6.1,
+            series=None,
+            auction_records=(),
+        ),
+        None,
+        previous_open_volume=100,
+    )
+    store.save_klines(
+        "000802.SZ",
+        [KlineBar(date="2026-08-13", open=6, close=6, high=6, low=6, volume=1000)],
+    )
+
+    scan = LocalStrategyAuctionProvider(
+        store, require_preopen=False, require_seconds=False
+    ).scan(["000802.SZ"], trade_date=trade_date)
+
+    observation = scan.observations["000802.SZ"]
+    assert observation.last_second_pct is None
+    assert observation.open_change_pct == pytest.approx(1.6393)
+    assert observation.auction_volume_ratio == 2
+
+
 def test_local_candidates_only_use_previous_sessions(tmp_path) -> None:
     store = StrategyRawStore(tmp_path)
     for trade_date in ("2026-08-11", "2026-08-12", "2026-08-13"):

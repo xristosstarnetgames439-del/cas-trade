@@ -131,7 +131,7 @@ def recent_limit_up_candidates(
 
 
 def _matches(item: AuctionSnapshotItem, rules: dict[str, object]) -> bool:
-    if rules.get("require_last_second_price_up", True) and item.last_second_price_up is not True:
+    if rules.get("require_last_second_price_up", True) and item.last_second_price_up is False:
         return False
     min_open_gap = float(rules.get("min_open_gap_pct", -100.0))
     if item.open_gap_pct is None or item.open_gap_pct < min_open_gap:
@@ -173,6 +173,7 @@ def _strategy_item(
     break_days = _break_days(
         candidate, trade_date=trade_date, days=recent_days, extra_dates=extra_dates
     )
+    has_preopen = observation.last_second_pct is not None
     return AuctionSnapshotItem(
         symbol=candidate.symbol,
         name=candidate.name,
@@ -182,15 +183,23 @@ def _strategy_item(
         open_gap_pct=observation.open_change_pct,
         turnover_cny=observation.open_amount,
         volume=observation.open_volume,
-        auction_score=round(observation.last_second_pct, 4),
+        auction_score=round(observation.last_second_pct or 0, 4),
         tier="strong_high_open" if (observation.open_change_pct or 0) >= 3 else "neutral",
-        action_note=f"最后一刻抬价，前 {recent_days} 个交易日有涨停，竞价位置符合策略。",
-        signals=["竞价最后一刻抬价", f"近{recent_days}日涨停", *([pattern] if pattern else [])],
+        action_note=(
+            f"最后一刻抬价，前 {recent_days} 个交易日有涨停，竞价位置符合策略。"
+            if has_preopen
+            else f"历史竞价仅有 09:25 撮合，按可用条件筛选；前 {recent_days} 个交易日有涨停。"
+        ),
+        signals=[
+            *(["竞价最后一刻抬价"] if has_preopen else []),
+            f"近{recent_days}日涨停",
+            *([pattern] if pattern else []),
+        ],
         quote_time="09:25:00",
-        last_second_price_up=observation.last_second_pct > 0,
+        last_second_price_up=(observation.last_second_pct > 0 if has_preopen else None),
         last_second_pct=observation.last_second_pct,
         prev_node_price=observation.previous_price,
-        prev_node_time=f"{trade_date}T{observation.previous_time}",
+        prev_node_time=(f"{trade_date}T{observation.previous_time}" if has_preopen else None),
         limit_up_3d=recent_days == 3,
         limit_up_pattern_days=pattern_days,
         limit_up_board_count=board_count,

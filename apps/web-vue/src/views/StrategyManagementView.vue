@@ -315,7 +315,7 @@ onUnmounted(stopDownloadPoll);
     <section v-else class="strategy-detail border border-border rounded-6px bg-container p-12px">
       <a-alert
         class="mb-10px"
-        message="历史策略只读取本地文件；没有秒级竞价时不能计算有效抬价，系统不会自动放宽条件。"
+        message="历史策略只读取本地文件；勾选有效抬价时必须有秒级竞价，未勾选时可继续使用 09:25 价量和日 K 条件筛选。"
         show-icon
         type="info"
       />

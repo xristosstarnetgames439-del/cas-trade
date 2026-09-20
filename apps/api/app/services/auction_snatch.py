@@ -34,9 +34,9 @@ class AuctionSnatchObservation:
     open_change_pct: float | None
     open_volume: float | None
     open_amount: float | None
-    previous_price: float
+    previous_price: float | None
     previous_time: str
-    last_second_pct: float
+    last_second_pct: float | None
     valid_raise_count: int | None = None
     previous_open_volume: float | None = None
     auction_volume_ratio: float | None = None
