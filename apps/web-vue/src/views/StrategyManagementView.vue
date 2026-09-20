@@ -35,6 +35,7 @@ const createOpen = ref(false);
 const creating = ref(false);
 const selectedExactFilterSlots = ref<number[]>([]);
 const storedRun = ref<AuctionSnapshotResponse | null>(null);
+const downloadOpen = ref(false);
 const downloadPeriod = ref<StrategyRawPeriod>('month');
 const downloadJob = ref<BackgroundJobState | null>(null);
 const downloadError = ref<string | null>(null);
@@ -213,6 +214,7 @@ async function startDownload() {
   downloadWarningClosed.value = false;
   try {
     downloadJob.value = await createStrategyRawDownload(strategyId, downloadPeriod.value);
+    downloadOpen.value = false;
     if (!isTerminalJob(downloadJob.value)) scheduleDownloadPoll(strategyId, downloadJob.value.job_id);
   } catch (cause) {
     downloadError.value = cause instanceof Error ? cause.message : '启动历史数据下载失败';
@@ -275,22 +277,11 @@ onUnmounted(stopDownloadPoll);
         :disabled-date="disableNonTradingDate"
         @change="(_, value) => handleDateChange(String(value))"
       />
-      <a-select
-        v-if="activeStrategy"
-        v-model:value="downloadPeriod"
-        class="download-period"
-        :disabled="downloadRunning"
-        :options="[
-          { label: '本月', value: 'month' },
-          { label: '近三月', value: 'three_months' },
-          { label: '本年', value: 'year' }
-        ]"
-      />
       <a-button
         v-if="activeStrategy"
         data-testid="strategy-download-button"
         :loading="downloadRunning"
-        @click="startDownload"
+        @click="downloadOpen = true"
       >
         下载历史数据
       </a-button>
@@ -428,6 +419,29 @@ onUnmounted(stopDownloadPoll);
       </DataList>
     </section>
 
+    <a-modal
+      v-model:open="downloadOpen"
+      title="下载历史数据"
+      ok-text="开始下载"
+      :confirm-loading="downloadRunning"
+      @ok="startDownload"
+    >
+      <a-form layout="vertical">
+        <a-form-item label="下载时间区间">
+          <a-select
+            v-model:value="downloadPeriod"
+            data-testid="strategy-download-period"
+            class="download-period-select"
+            :options="[
+              { label: '本月', value: 'month' },
+              { label: '近三月', value: 'three_months' },
+              { label: '本年', value: 'year' }
+            ]"
+          />
+        </a-form-item>
+      </a-form>
+    </a-modal>
+
     <a-modal v-model:open="createOpen" title="新增个人选股策略" :confirm-loading="creating" :ok-button-props="{ disabled: !canCreate }" @ok="submitStrategy">
       <a-form layout="vertical">
         <a-form-item label="策略标题" required><a-input v-model:value="form.title" :maxlength="40" /></a-form-item>
@@ -461,8 +475,8 @@ onUnmounted(stopDownloadPoll);
   gap: 12px;
 }
 
-.download-period {
-  width: 108px;
+.download-period-select {
+  width: 100%;
 }
 
 .download-progress {

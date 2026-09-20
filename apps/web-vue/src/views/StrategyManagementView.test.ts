@@ -126,16 +126,20 @@ function mountView() {
         }),
         AButton: ButtonStub,
         ADatePicker: true,
-        AForm: true,
-        AFormItem: true,
+        AForm: { template: '<form><slot /></form>' },
+        AFormItem: { props: ['label'], template: '<label>{{ label }}<slot /></label>' },
         AInput: true,
         AInputNumber: true,
-        AModal: true,
+        AModal: defineComponent({
+          props: { open: Boolean, title: String },
+          emits: ['ok', 'update:open'],
+          template: '<section v-if="open" role="dialog"><h2>{{ title }}</h2><slot /><button data-testid="modal-ok" @click="$emit(\'ok\')">确定</button></section>'
+        }),
         AProgress: true,
         ASelect: defineComponent({
           props: ['value', 'options', 'disabled'],
           emits: ['update:value'],
-          template: '<select :disabled="disabled"><option v-for="item in options" :key="item.value" :value="item.value">{{ item.label }}</option></select>'
+          template: '<select :value="value" :disabled="disabled" @change="$emit(\'update:value\', $event.target.value)"><option v-for="item in options" :key="item.value" :value="item.value">{{ item.label }}</option></select>'
         }),
         ASwitch: true,
         ATag: true,
@@ -248,9 +252,15 @@ describe('StrategyManagementView', () => {
     await flushPromises();
     await wrapper.get('.strategy-card').trigger('click');
     await wrapper.get('[data-testid="strategy-download-button"]').trigger('click');
+    expect(wrapper.get('[role="dialog"]').text()).toContain('下载时间区间');
+    expect(api.createStrategyRawDownload).not.toHaveBeenCalled();
+
+    await wrapper.get('[data-testid="strategy-download-period"]').setValue('year');
+    await wrapper.get('[data-testid="modal-ok"]').trigger('click');
     await flushPromises();
 
-    expect(api.createStrategyRawDownload).toHaveBeenCalledWith('auction_snatch', 'month');
+    expect(api.createStrategyRawDownload).toHaveBeenCalledWith('auction_snatch', 'year');
+    expect(wrapper.find('[role="dialog"]').exists()).toBe(false);
     expect(wrapper.text()).toContain('竞价抢筹历史数据下载完成');
     expect(wrapper.text()).toContain('可能停牌');
     expect(wrapper.text()).toContain('可能为新股');
