@@ -145,9 +145,10 @@ class StrategyRawStore:
         payload = self.load_klines(symbol)
         if payload is None:
             return False
-        return str(payload.get("start_date", "")) <= start.isoformat() and str(
-            payload.get("end_date", "")
-        ) >= end.isoformat()
+        return (
+            str(payload.get("start_date", "")) <= start.isoformat()
+            and str(payload.get("end_date", "")) >= end.isoformat()
+        )
 
 
 class LocalStrategyCandidateProvider:
@@ -168,9 +169,7 @@ class LocalStrategyCandidateProvider:
                 missing.append(day.isoformat())
                 continue
             rows = payload.get("rows")
-            rows_by_date.append(
-                (day.strftime("%Y%m%d"), rows if isinstance(rows, list) else [])
-            )
+            rows_by_date.append((day.strftime("%Y%m%d"), rows if isinstance(rows, list) else []))
         if missing:
             raise StrongStockDataUnavailable(
                 f"历史涨停池缺失：{', '.join(missing[:5])}，请先下载对应区间"
@@ -299,6 +298,7 @@ def run_strategy_raw_download(
 
     downloaded_pools = downloaded_auctions = downloaded_klines = 0
     failures: dict[str, str] = {}
+    warnings: dict[str, str] = {}
     warmup_start = _previous_open_dates(dates[0], max(lookback_days, 10))[-1]
     kline_count = max(80, (dates[-1] - warmup_start).days * 5 // 7 + 60)
     try:
@@ -323,15 +323,11 @@ def run_strategy_raw_download(
                 ]
             symbols = [candidate.symbol for candidate in candidates]
             missing_auctions = [
-                symbol
-                for symbol in symbols
-                if store.load_auction(trade_date, symbol) is None
+                symbol for symbol in symbols if store.load_auction(trade_date, symbol) is None
             ]
             if missing_auctions:
                 try:
-                    auction_provider_factory(store).scan(
-                        missing_auctions, trade_date=trade_date
-                    )
+                    auction_provider_factory(store).scan(missing_auctions, trade_date=trade_date)
                 except Exception as exc:
                     _raise_if_canceled(should_cancel)
                     reason = _exception_summary(exc)
@@ -352,6 +348,7 @@ def run_strategy_raw_download(
                 kline_path = f"klines/{symbol}.json"
                 if store.has_kline_coverage(symbol, warmup_start, dates[-1]):
                     failures.pop(kline_path, None)
+                    warnings.pop(kline_path, None)
                     continue
                 _raise_if_canceled(should_cancel)
                 try:
@@ -359,18 +356,22 @@ def run_strategy_raw_download(
                     downloaded_klines += int(store.save_klines(symbol, bars))
                     if store.has_kline_coverage(symbol, warmup_start, dates[-1]):
                         failures.pop(kline_path, None)
+                        warnings.pop(kline_path, None)
                     else:
-                        payload = store.load_klines(symbol) or {}
-                        actual_start = str(payload.get("start_date") or "无数据")
-                        actual_end = str(payload.get("end_date") or "无数据")
-                        failures[kline_path] = (
-                            f"{kline_path}：日K覆盖不足，需要 {warmup_start.isoformat()}"
-                            f"～{dates[-1].isoformat()}，实际 {actual_start}～{actual_end}"
-                        )
+                        payload = store.load_klines(symbol)
+                        if payload is None:
+                            failures[kline_path] = f"{kline_path}：日K请求完成后未返回可用数据"
+                        else:
+                            failures.pop(kline_path, None)
+                            warnings[kline_path] = _kline_coverage_warning(
+                                kline_path,
+                                payload,
+                                required_start=warmup_start,
+                                required_end=dates[-1],
+                            )
                 except Exception as exc:
-                    failures[kline_path] = (
-                        f"{kline_path}：日K请求失败（{_exception_summary(exc)}）"
-                    )
+                    warnings.pop(kline_path, None)
+                    failures[kline_path] = f"{kline_path}：日K请求失败（{_exception_summary(exc)}）"
             progress(
                 index + 1,
                 len(dates),
@@ -378,15 +379,18 @@ def run_strategy_raw_download(
             )
         if failures:
             details = list(failures.values())
-            preview = "；".join(details[:5])
-            remaining = f"；另有 {len(details) - 5} 项" if len(details) > 5 else ""
             raise StrongStockDataUnavailable(
-                f"下载已完成，但有 {len(details)} 个文件不完整。"
-                f"目标交易区间：{dates[0].isoformat()}～{dates[-1].isoformat()}；"
-                f"日K预热区间：{warmup_start.isoformat()}～{dates[-1].isoformat()}；"
-                f"失败明细：{preview}{remaining}。已成功写入的数据会保留，重新下载会自动续传"
+                _download_notice(
+                    f"下载已完成，但有 {len(details)} 个文件失败。",
+                    "失败明细",
+                    details,
+                    target_start=dates[0],
+                    target_end=dates[-1],
+                    warmup_start=warmup_start,
+                    footer="已成功写入的数据会保留，重新下载会自动续传",
+                )
             )
-        return {
+        result: dict[str, object] = {
             "period": period,
             "start_date": dates[0].isoformat(),
             "end_date": dates[-1].isoformat(),
@@ -395,6 +399,19 @@ def run_strategy_raw_download(
             "downloaded_auctions": downloaded_auctions,
             "downloaded_klines": downloaded_klines,
         }
+        if warnings:
+            details = list(warnings.values())
+            result["warning_count"] = len(details)
+            result["warning"] = _download_notice(
+                f"下载完成，有 {len(details)} 个文件需要注意。",
+                "警告明细",
+                details,
+                target_start=dates[0],
+                target_end=dates[-1],
+                warmup_start=warmup_start,
+                footer="这些情况通常由新股上市或停牌导致，不影响已下载数据使用",
+            )
+        return result
     finally:
         if owns_kline_provider:
             close = getattr(kline_provider, "close", None)
@@ -540,6 +557,48 @@ def _exception_summary(exc: Exception) -> str:
     return f"{exc.__class__.__name__}: {detail[:160]}" if detail else exc.__class__.__name__
 
 
+def _kline_coverage_warning(
+    path: str,
+    payload: dict[str, object],
+    *,
+    required_start: date,
+    required_end: date,
+) -> str:
+    actual_start = str(payload.get("start_date") or "无数据")
+    actual_end = str(payload.get("end_date") or "无数据")
+    reasons = []
+    if actual_start > required_start.isoformat():
+        reasons.append("起始历史不足（可能为新股）")
+    if actual_end < required_end.isoformat():
+        reasons.append("末端无交易数据（可能停牌）")
+    reason = "、".join(reasons) or "覆盖范围不足"
+    return (
+        f"{path}：{reason}，需要 {required_start.isoformat()}～{required_end.isoformat()}，"
+        f"实际 {actual_start}～{actual_end}"
+    )
+
+
+def _download_notice(
+    title: str,
+    detail_label: str,
+    details: list[str],
+    *,
+    target_start: date,
+    target_end: date,
+    warmup_start: date,
+    footer: str,
+) -> str:
+    preview = "\n".join(details[:5])
+    remaining = f"\n另有 {len(details) - 5} 项" if len(details) > 5 else ""
+    return (
+        f"{title}\n"
+        f"目标交易区间：{target_start.isoformat()}～{target_end.isoformat()}；\n"
+        f"日K预热区间：{warmup_start.isoformat()}～{target_end.isoformat()}；\n"
+        f"{detail_label}：\n{preview}{remaining}\n"
+        f"{footer}"
+    )
+
+
 def _previous_open_dates(value: date, count: int) -> list[date]:
     output: list[date] = []
     cursor = value
@@ -576,7 +635,9 @@ def _raise_if_canceled(should_cancel: CancelCheck) -> None:
 
 def _safe_symbol(symbol: str) -> str:
     normalized = symbol.strip().upper()
-    if not normalized or any(character not in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ._-" for character in normalized):
+    if not normalized or any(
+        character not in "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ._-" for character in normalized
+    ):
         raise ValueError("证券代码格式不正确")
     return normalized
 

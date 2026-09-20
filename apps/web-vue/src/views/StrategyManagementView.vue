@@ -38,9 +38,16 @@ const storedRun = ref<AuctionSnapshotResponse | null>(null);
 const downloadPeriod = ref<StrategyRawPeriod>('month');
 const downloadJob = ref<BackgroundJobState | null>(null);
 const downloadError = ref<string | null>(null);
+const downloadWarningClosed = ref(false);
 let downloadPollTimer: ReturnType<typeof setTimeout> | null = null;
 const hasStoredRun = computed(() => storedRun.value !== null);
 const downloadRunning = computed(() => downloadJob.value?.status === 'pending' || downloadJob.value?.status === 'running');
+const downloadWarning = computed(() => {
+  const jobResult = downloadJob.value?.result;
+  if (!jobResult || typeof jobResult !== 'object') return null;
+  const warning = (jobResult as Record<string, unknown>).warning;
+  return typeof warning === 'string' ? warning : null;
+});
 const downloadProgress = computed(() => {
   if (downloadJob.value?.status === 'success') return 100;
   const current = downloadJob.value?.progress_current ?? 0;
@@ -203,6 +210,7 @@ async function startDownload() {
   if (!activeStrategy.value || downloadRunning.value) return;
   const strategyId = activeStrategy.value.id;
   downloadError.value = null;
+  downloadWarningClosed.value = false;
   try {
     downloadJob.value = await createStrategyRawDownload(strategyId, downloadPeriod.value);
     if (!isTerminalJob(downloadJob.value)) scheduleDownloadPoll(strategyId, downloadJob.value.job_id);
@@ -320,7 +328,24 @@ onUnmounted(stopDownloadPoll);
         show-icon
         type="info"
       />
-      <a-alert v-if="downloadError" class="mb-10px" :message="downloadError" show-icon type="error" />
+      <a-alert
+        v-if="downloadError"
+        class="download-notice mb-10px"
+        :message="downloadError"
+        closable
+        show-icon
+        type="error"
+        @close="downloadError = null"
+      />
+      <a-alert
+        v-if="downloadWarning && !downloadWarningClosed"
+        class="download-notice mb-10px"
+        :message="downloadWarning"
+        closable
+        show-icon
+        type="warning"
+        @close="downloadWarningClosed = true"
+      />
       <div v-if="downloadJob" class="download-progress">
         <a-progress :percent="downloadProgress" size="small" />
         <span>{{ downloadJob.message }}</span>
@@ -448,6 +473,10 @@ onUnmounted(stopDownloadPoll);
   margin-bottom: 10px;
   color: var(--text-color-2, #64748b);
   font-size: 12px;
+}
+
+.download-notice :deep(.ant-alert-message) {
+  white-space: pre-line;
 }
 
 .strategy-card {

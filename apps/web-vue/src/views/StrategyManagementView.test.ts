@@ -119,7 +119,11 @@ function mountView() {
   return mount(StrategyManagementView, {
     global: {
       stubs: {
-        AAlert: { props: ['message'], template: '<div role="alert">{{ message }}</div>' },
+        AAlert: defineComponent({
+          props: { message: String, closable: Boolean },
+          emits: ['close'],
+          template: '<div role="alert"><span>{{ message }}</span><button v-if="closable" data-testid="alert-close" @click="$emit(\'close\')">关闭</button></div>'
+        }),
         AButton: ButtonStub,
         ADatePicker: true,
         AForm: true,
@@ -219,6 +223,14 @@ describe('StrategyManagementView', () => {
   });
 
   it('starts a resumable history download for the active strategy', async () => {
+    const warning = [
+      '下载完成，有 2 个文件需要注意。',
+      '目标交易区间：2026-09-01～2026-09-18；',
+      '日K预热区间：2026-08-18～2026-09-18；',
+      '警告明细：',
+      'klines/603400.SH.json：末端无交易数据（可能停牌）',
+      'klines/601123.SH.json：起始历史不足（可能为新股）'
+    ].join('\n');
     api.createStrategyRawDownload.mockResolvedValue({
       job_id: 'raw-job-1',
       type: 'strategy_raw_download',
@@ -230,7 +242,7 @@ describe('StrategyManagementView', () => {
       finished_at: null,
       error: null,
       result_path: null,
-      result: { trading_days: 12 }
+      result: { trading_days: 12, warning_count: 2, warning }
     });
     const wrapper = mountView();
     await flushPromises();
@@ -240,5 +252,10 @@ describe('StrategyManagementView', () => {
 
     expect(api.createStrategyRawDownload).toHaveBeenCalledWith('auction_snatch', 'month');
     expect(wrapper.text()).toContain('竞价抢筹历史数据下载完成');
+    expect(wrapper.text()).toContain('可能停牌');
+    expect(wrapper.text()).toContain('可能为新股');
+
+    await wrapper.get('[data-testid="alert-close"]').trigger('click');
+    expect(wrapper.text()).not.toContain('可能停牌');
   });
 });

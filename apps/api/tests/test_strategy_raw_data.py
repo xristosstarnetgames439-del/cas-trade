@@ -13,6 +13,7 @@ from app.services.strategy_raw_data import (
     LocalStrategyCandidateProvider,
     StrategyRawDownloadCanceled,
     StrategyRawStore,
+    _kline_coverage_warning,
     run_strategy_raw_download,
     strategy_download_dates,
 )
@@ -86,9 +87,7 @@ def test_raw_store_keeps_seconds_and_local_provider_reads_it(tmp_path) -> None:
             )
         ],
     )
-    provider = LocalStrategyAuctionProvider(
-        store, require_preopen=True, require_seconds=True
-    )
+    provider = LocalStrategyAuctionProvider(store, require_preopen=True, require_seconds=True)
 
     scan = provider.scan(["000802.SZ"], trade_date=trade_date)
 
@@ -115,9 +114,9 @@ def test_local_history_reports_missing_second_resolution(tmp_path) -> None:
     )
 
     with pytest.raises(StrongStockDataUnavailable, match="没有秒级竞价"):
-        LocalStrategyAuctionProvider(
-            store, require_preopen=True, require_seconds=True
-        ).scan(["000802.SZ"], trade_date=trade_date)
+        LocalStrategyAuctionProvider(store, require_preopen=True, require_seconds=True).scan(
+            ["000802.SZ"], trade_date=trade_date
+        )
 
 
 def test_local_candidates_only_use_previous_sessions(tmp_path) -> None:
@@ -125,9 +124,7 @@ def test_local_candidates_only_use_previous_sessions(tmp_path) -> None:
     for trade_date in ("2026-08-11", "2026-08-12", "2026-08-13"):
         store.save_pool(trade_date, [{"代码": "000802", "名称": "北京文化"}])
 
-    candidates = LocalStrategyCandidateProvider(store, lookback_days=3).get_candidates(
-        "20260814"
-    )
+    candidates = LocalStrategyCandidateProvider(store, lookback_days=3).get_candidates("20260814")
 
     assert [candidate.symbol for candidate in candidates] == ["000802.SZ"]
     assert "20260814" not in candidates[0].board_note
@@ -157,7 +154,9 @@ def test_download_cancel_is_reported_as_canceled(tmp_path) -> None:
         )
 
 
-def test_download_error_reports_target_warmup_and_actual_ranges(tmp_path) -> None:
+def test_download_reports_partial_coverage_as_warning_and_request_error_as_failure(
+    tmp_path,
+) -> None:
     def auction_factory(store: StrategyRawStore):
         class _AuctionProvider:
             def scan(self, symbols, *, trade_date):
@@ -192,28 +191,56 @@ def test_download_error_reports_target_warmup_and_actual_ranges(tmp_path) -> Non
                 )
             ]
 
-    with pytest.raises(StrongStockDataUnavailable) as caught:
-        run_strategy_raw_download(
-            tmp_path,
-            "month",
-            lookback_days=3,
-            symbol_prefixes=("00", "60"),
-            progress=lambda *_args: None,
-            should_cancel=lambda: False,
-            pool_fetcher=lambda _date: [
-                {"代码": "000802", "名称": "北京文化"}
-            ],
-            auction_provider_factory=auction_factory,
-            kline_provider=_ShortKlines(),
-            now=datetime(2026, 9, 1, 16, tzinfo=ZoneInfo("Asia/Shanghai")),
-        )
+    kwargs = {
+        "lookback_days": 3,
+        "symbol_prefixes": ("00", "60"),
+        "progress": lambda *_args: None,
+        "should_cancel": lambda: False,
+        "pool_fetcher": lambda _date: [{"代码": "000802", "名称": "北京文化"}],
+        "auction_provider_factory": auction_factory,
+        "now": datetime(2026, 9, 1, 16, tzinfo=ZoneInfo("Asia/Shanghai")),
+    }
+    result = run_strategy_raw_download(
+        tmp_path,
+        "month",
+        kline_provider=_ShortKlines(),
+        **kwargs,
+    )
 
-    message = str(caught.value)
-    assert "有 1 个文件不完整" in message
+    message = str(result["warning"])
+    assert result["warning_count"] == 1
+    assert message.startswith("下载完成，有 1 个文件需要注意。\n")
     assert "目标交易区间：2026-09-01～2026-09-01" in message
     assert "日K预热区间" in message
-    assert "klines/000802.SZ.json：日K覆盖不足" in message
+    assert "警告明细：\nklines/000802.SZ.json：起始历史不足（可能为新股）" in message
     assert "实际 2026-09-01～2026-09-01" in message
+    suspension = _kline_coverage_warning(
+        "klines/603400.SH.json",
+        {"start_date": "2026-04-03", "end_date": "2026-09-14"},
+        required_start=date(2026, 8, 18),
+        required_end=date(2026, 9, 18),
+    )
+    assert "末端无交易数据（可能停牌）" in suspension
+
+    class _FailedKlines:
+        def get_klines(self, _symbol, count=220):
+            raise RuntimeError("上游超时")
+
+    with pytest.raises(StrongStockDataUnavailable) as caught:
+        failure_kwargs = {
+            **kwargs,
+            "pool_fetcher": lambda _date: [{"代码": "000802", "名称": "北京文化"}],
+        }
+        run_strategy_raw_download(
+            tmp_path / "failed",
+            "month",
+            kline_provider=_FailedKlines(),
+            **failure_kwargs,
+        )
+
+    failure = str(caught.value)
+    assert failure.startswith("下载已完成，但有 1 个文件失败。\n")
+    assert "失败明细：\nklines/000802.SZ.json：日K请求失败（RuntimeError: 上游超时）" in failure
 
 
 def test_download_writes_one_day_and_rerun_skips_existing_files(tmp_path) -> None:
