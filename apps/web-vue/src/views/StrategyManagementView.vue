@@ -56,7 +56,6 @@ const downloadProgress = computed(() => {
   return total > 0 ? Math.round((current / total) * 100) : 0;
 });
 let probeSeq = 0;
-let runSeq = 0;
 const form = reactive<StrategyCreateRequest>({
   title: '',
   description: '',
@@ -89,8 +88,6 @@ async function execute() {
   if (!activeStrategy.value) return;
   const strategyId = activeStrategy.value.id;
   const date = tradeDate.value;
-  runSeq += 1;
-  const seq = runSeq;
   loading.value = true;
   error.value = null;
   result.value = null;
@@ -99,16 +96,16 @@ async function execute() {
       limit: 100,
       exactConditions: selectedExactFilterSlots.value
     });
-    if (seq !== runSeq || activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
+    if (activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
     result.value = snapshot;
     storedRun.value = snapshot;
     probeSeq += 1;
   } catch (cause) {
-    if (seq !== runSeq || activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
+    if (activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
     result.value = null;
     error.value = cause instanceof Error ? cause.message : '执行策略失败';
   } finally {
-    if (seq === runSeq && activeStrategy.value?.id === strategyId && tradeDate.value === date) {
+    if (activeStrategy.value?.id === strategyId && tradeDate.value === date) {
       loading.value = false;
     }
   }
@@ -190,9 +187,8 @@ function resetExactFilter() {
   );
 }
 
-async function selectAllExactFilters() {
+function selectAllExactFilters() {
   selectedExactFilterSlots.value = exactFilterOptions.value.map((_condition, index) => index);
-  await execute();
 }
 
 function handleDateChange(value: string) {
@@ -387,7 +383,7 @@ onUnmounted(stopDownloadPoll);
             :key="`${index}-${condition.label}`"
             class="exact-filter-option"
           >
-            <input v-model="selectedExactFilterSlots" type="checkbox" :value="index" @change="execute" />
+            <input v-model="selectedExactFilterSlots" type="checkbox" :value="index" />
             <span>{{ condition.label }}</span>
           </label>
           <a-button

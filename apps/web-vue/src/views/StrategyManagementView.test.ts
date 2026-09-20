@@ -226,7 +226,7 @@ describe('StrategyManagementView', () => {
     expect(wrapper.text()).toContain('闽东电力');
   });
 
-  it('reruns immediately when an exact condition changes', async () => {
+  it('waits for the run button after exact conditions change', async () => {
     api.runStrategy.mockResolvedValue(SNAPSHOT);
     const wrapper = mountView();
     await flushPromises();
@@ -237,9 +237,19 @@ describe('StrategyManagementView', () => {
     await checkboxes[0].setValue(false);
     await flushPromises();
 
+    expect(api.runStrategy).not.toHaveBeenCalled();
+
+    await wrapper.get('.exact-filter-scroll button').trigger('click');
+    await flushPromises();
+    expect(api.runStrategy).not.toHaveBeenCalled();
+
+    await checkboxes[0].setValue(false);
+    await wrapper.get('[data-testid="strategy-run-button"]').trigger('click');
+    await flushPromises();
+
     expect(api.runStrategy).toHaveBeenLastCalledWith('auction_snatch', '2026-09-18', {
       limit: 100,
-      exactConditions: [1, 3]
+      exactConditions: [1, 2, 3]
     });
     expect(wrapper.text()).toContain('闽东电力');
   });
