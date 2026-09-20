@@ -118,6 +118,38 @@ class StrategyHistoryStore:
             return None
         return snapshot.model_copy(update={"snapshot_status": "cached"}, deep=True)
 
+    def load_auction_metrics(
+        self, strategy_id: str, trade_date: str
+    ) -> list[AuctionSnapshotItem]:
+        """按股票读取历史上字段最完整的一条竞价结果，用于补全原始 JSON。"""
+        with self._connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT items.item_json
+                FROM strategy_run_items AS items
+                JOIN strategy_runs AS runs ON runs.run_id = items.run_id
+                WHERE runs.strategy_id = ? AND runs.trade_date = ?
+                ORDER BY
+                  items.valid_raise_count IS NOT NULL DESC,
+                  items.last_second_pct IS NOT NULL DESC,
+                  runs.generated_at DESC,
+                  items.rank
+                """,
+                (strategy_id, trade_date),
+            ).fetchall()
+        items: list[AuctionSnapshotItem] = []
+        seen: set[str] = set()
+        for row in rows:
+            try:
+                item = AuctionSnapshotItem.model_validate_json(row["item_json"])
+            except Exception:
+                continue
+            if item.symbol in seen:
+                continue
+            seen.add(item.symbol)
+            items.append(item)
+        return items
+
     def _ensure_schema(self) -> None:
         with self._connect() as connection:
             connection.executescript(_SCHEMA)

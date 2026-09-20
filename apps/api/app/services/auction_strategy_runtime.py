@@ -108,10 +108,17 @@ def run_auction_rules(
             ),
             StrongStockSourceStatus(
                 source=auction_provider.source_name,
-                status="success" if scan.observations else "failed",
+                status=(
+                    "stale"
+                    if scan.observations and scan.failed
+                    else "success"
+                    if scan.observations
+                    else "failed"
+                ),
                 detail=(
-                    f"逐只核验 {scan.attempted} 只，策略命中 {len(items)} 只"
-                    + (f"，{scan.failed} 只读取失败" if scan.failed else "")
+                    f"逐只核验 {scan.attempted} 只，可用数据 {len(scan.observations)} 只，"
+                    f"策略命中 {len(items)} 只"
+                    + (f"，{scan.failed} 只重拉后仍缺所需字段" if scan.failed else "")
                 ),
             ),
         ],

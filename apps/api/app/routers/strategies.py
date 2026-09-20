@@ -79,6 +79,10 @@ def run_strategy(
             lookback_days = max(1, int(rules.get("recent_limit_up_days", 3)))
             required = _selected_requirements(metadata, selected_exact)
             raw_store = StrategyRawStore(data_dir)
+            for item in StrategyHistoryStore(data_dir).load_auction_metrics(
+                strategy_id, trade_date
+            ):
+                raw_store.merge_item_metrics(trade_date, item)
             candidate_provider = LocalStrategyCandidateProvider(
                 raw_store, lookback_days=lookback_days
             )
@@ -86,6 +90,10 @@ def run_strategy(
                 raw_store,
                 require_preopen=bool({"preopen", "seconds"} & required),
                 require_seconds="seconds" in required,
+                refresh_provider=EltdxAuctionProvider(
+                    workers=4,
+                    archive_store=raw_store,
+                ),
             )
         else:
             candidate_provider = _candidate_provider()

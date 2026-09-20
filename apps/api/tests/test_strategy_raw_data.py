@@ -6,8 +6,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from app.models import KlineBar, StrongStockDataUnavailable
-from app.services.auction_snatch import AuctionSnatchObservation
+from app.models import AuctionSnapshotItem, KlineBar, StrongStockDataUnavailable
+from app.services.auction_snatch import AuctionSnatchObservation, AuctionSnatchScan
 from app.services.strategy_raw_data import (
     LocalStrategyAuctionProvider,
     LocalStrategyCandidateProvider,
@@ -96,7 +96,7 @@ def test_raw_store_keeps_seconds_and_local_provider_reads_it(tmp_path) -> None:
     assert not list(store.root.rglob("*.part"))
 
 
-def test_local_history_reports_missing_second_resolution(tmp_path) -> None:
+def test_local_history_skips_missing_second_resolution(tmp_path) -> None:
     store = StrategyRawStore(tmp_path)
     trade_date = "2026-08-14"
     auction = SimpleNamespace(
@@ -109,14 +109,16 @@ def test_local_history_reports_missing_second_resolution(tmp_path) -> None:
         trade_date,
         "000802.SZ",
         auction,
-        _observation(),
+        None,
         previous_open_volume=100,
     )
 
-    with pytest.raises(StrongStockDataUnavailable, match="没有秒级竞价"):
-        LocalStrategyAuctionProvider(store, require_preopen=True, require_seconds=True).scan(
-            ["000802.SZ"], trade_date=trade_date
-        )
+    scan = LocalStrategyAuctionProvider(
+        store, require_preopen=True, require_seconds=True
+    ).scan(["000802.SZ"], trade_date=trade_date)
+
+    assert scan.observations == {}
+    assert scan.failed == 1
 
 
 def test_local_history_uses_match_only_price_and_volume_when_path_is_not_required(
@@ -149,6 +151,119 @@ def test_local_history_uses_match_only_price_and_volume_when_path_is_not_require
     assert observation.last_second_pct is None
     assert observation.open_change_pct == pytest.approx(1.6393)
     assert observation.auction_volume_ratio == 2
+
+
+def test_match_only_json_persists_all_filter_metrics_and_accepts_history_backfill(
+    tmp_path,
+) -> None:
+    store = StrategyRawStore(tmp_path)
+    trade_date = "2026-08-14"
+    store.archive_auction(
+        trade_date,
+        "000802.SZ",
+        SimpleNamespace(
+            snapshot_0925=SimpleNamespace(price=6.2, volume=200, trade_amount_yuan=1240),
+            pre_close_price=6.1,
+            series=None,
+            auction_records=(),
+        ),
+        None,
+        previous_open_volume=100,
+    )
+
+    payload = store.load_auction(trade_date, "000802.SZ")
+    assert payload is not None
+    assert payload["observation"] == {
+        "symbol": "000802.SZ",
+        "open_price": 6.2,
+        "open_change_pct": pytest.approx(1.6393),
+        "open_volume": 200.0,
+        "open_amount": 1240.0,
+        "previous_price": None,
+        "previous_time": "",
+        "last_second_pct": None,
+        "valid_raise_count": None,
+        "previous_open_volume": 100,
+        "auction_volume_ratio": 2.0,
+        "metric_source": "historical_match_only",
+    }
+
+    assert store.merge_item_metrics(
+        trade_date,
+        AuctionSnapshotItem(
+            symbol="000802.SZ",
+            last_price=6.2,
+            open_gap_pct=1.6393,
+            last_second_pct=3.3333,
+            valid_raise_count=4,
+            auction_volume_ratio=2,
+            prev_node_price=6,
+            prev_node_time="2026-08-14T09:24:57",
+        ),
+    )
+    updated = store.load_auction(trade_date, "000802.SZ")
+    assert updated is not None
+    assert updated["observation"]["last_second_pct"] == 3.3333
+    assert updated["observation"]["valid_raise_count"] == 4
+    assert updated["observation"]["metric_source"] == "strategy_history"
+
+
+def test_local_history_refreshes_missing_metrics_and_skips_unavailable_symbols(
+    tmp_path,
+) -> None:
+    store = StrategyRawStore(tmp_path)
+    trade_date = "2026-08-14"
+    for symbol in ("000802.SZ", "600001.SH"):
+        store.archive_auction(
+            trade_date,
+            symbol,
+            SimpleNamespace(
+                snapshot_0925=SimpleNamespace(price=6.2, volume=200, trade_amount_yuan=1240),
+                pre_close_price=6.1,
+                series=None,
+                auction_records=(),
+            ),
+            None,
+            previous_open_volume=100,
+        )
+        store.save_klines(
+            symbol,
+            [KlineBar(date="2026-08-13", open=6, close=6, high=6, low=6, volume=1000)],
+        )
+
+    class _RefreshProvider:
+        def __init__(self) -> None:
+            self.calls: list[list[str]] = []
+
+        def scan(self, symbols, *, trade_date):
+            self.calls.append(symbols)
+            store.merge_item_metrics(
+                trade_date,
+                AuctionSnapshotItem(
+                    symbol="000802.SZ",
+                    last_price=6.2,
+                    open_gap_pct=1.6393,
+                    last_second_pct=3.3333,
+                    valid_raise_count=4,
+                    auction_volume_ratio=2,
+                    prev_node_price=6,
+                    prev_node_time=f"{trade_date}T09:24:57",
+                ),
+            )
+            return AuctionSnatchScan(observations={}, attempted=len(symbols))
+
+    refresh = _RefreshProvider()
+    scan = LocalStrategyAuctionProvider(
+        store,
+        require_preopen=True,
+        require_seconds=True,
+        refresh_provider=refresh,
+    ).scan(["000802.SZ", "600001.SH"], trade_date=trade_date)
+
+    assert refresh.calls == [["000802.SZ", "600001.SH"]]
+    assert list(scan.observations) == ["000802.SZ"]
+    assert scan.observations["000802.SZ"].valid_raise_count == 4
+    assert scan.failed == 1
 
 
 def test_local_candidates_only_use_previous_sessions(tmp_path) -> None:

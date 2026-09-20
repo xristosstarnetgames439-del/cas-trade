@@ -10,7 +10,12 @@ from threading import RLock
 from typing import Literal
 from zoneinfo import ZoneInfo
 
-from app.models import KlineBar, StrongStockCandidate, StrongStockDataUnavailable
+from app.models import (
+    AuctionSnapshotItem,
+    KlineBar,
+    StrongStockCandidate,
+    StrongStockDataUnavailable,
+)
 from app.providers.recent_limit_up_candidates import (
     _fetch_pool_rows,
     parse_recent_limit_up_rows,
@@ -80,6 +85,37 @@ class StrategyRawStore:
             return None
         return payload
 
+    def ensure_observation_metrics(self, trade_date: str, symbol: str) -> bool:
+        """升级旧竞价文件，保证四个筛选指标键存在；不可恢复的值保留为 null。"""
+        path = self.auction_path(trade_date, symbol)
+        with _WRITE_LOCK:
+            payload = self.load_auction(trade_date, symbol)
+            if payload is None:
+                return False
+            raw = payload.get("observation")
+            observation = dict(raw) if isinstance(raw, dict) else {}
+            fallback = _match_only_observation_payload(
+                symbol,
+                payload.get("snapshot_0925")
+                if isinstance(payload.get("snapshot_0925"), dict)
+                else None,
+                pre_close_price=_optional_float(payload.get("pre_close_price")),
+                previous_open_volume=_optional_float(payload.get("previous_open_volume")),
+            )
+            if fallback is None:
+                return False
+            changed = not isinstance(raw, dict)
+            for key, value in fallback.items():
+                if key not in observation:
+                    observation[key] = value
+                    changed = True
+            if not changed:
+                return False
+            payload["observation"] = observation
+            payload["metrics_updated_at"] = _now()
+            _atomic_json(path, payload)
+            return True
+
     def archive_auction(
         self,
         trade_date: str,
@@ -91,6 +127,8 @@ class StrategyRawStore:
     ) -> bool:
         points, resolution = _serializable_points(auction)
         snapshot = getattr(auction, "snapshot_0925", None)
+        snapshot_payload = _snapshot_payload(snapshot)
+        pre_close_price = _number(getattr(auction, "pre_close_price", None))
         payload: dict[str, object] = {
             "schema_version": SCHEMA_VERSION,
             "trade_date": trade_date,
@@ -101,11 +139,17 @@ class StrategyRawStore:
             "has_preopen_path": bool(points),
             "has_open_match": snapshot is not None,
             "has_previous_open_volume": previous_open_volume not in (None, 0),
-            "pre_close_price": _number(getattr(auction, "pre_close_price", None)),
-            "snapshot_0925": _snapshot_payload(snapshot),
+            "pre_close_price": pre_close_price,
+            "snapshot_0925": snapshot_payload,
             "previous_open_volume": previous_open_volume,
             "points": points,
-            "observation": _observation_payload(observation),
+            "observation": _observation_payload(observation)
+            or _match_only_observation_payload(
+                symbol,
+                snapshot_payload,
+                pre_close_price=pre_close_price,
+                previous_open_volume=previous_open_volume,
+            ),
         }
         path = self.auction_path(trade_date, symbol)
         with _WRITE_LOCK:
@@ -114,6 +158,50 @@ class StrategyRawStore:
                 return False
             _atomic_json(path, payload)
         return True
+
+    def merge_item_metrics(self, trade_date: str, item: AuctionSnapshotItem) -> bool:
+        """把数据库里已有的真实竞价指标补进对应原始文件，不覆盖更完整数据。"""
+        path = self.auction_path(trade_date, item.symbol)
+        with _WRITE_LOCK:
+            payload = self.load_auction(trade_date, item.symbol)
+            if payload is None:
+                return False
+            raw = payload.get("observation")
+            observation = dict(raw) if isinstance(raw, dict) else {}
+            values: dict[str, object] = {
+                "symbol": item.symbol,
+                "open_price": item.last_price,
+                "open_change_pct": item.open_gap_pct,
+                "open_volume": item.volume,
+                "open_amount": item.turnover_cny,
+                "previous_price": item.prev_node_price,
+                "previous_time": (
+                    item.prev_node_time.rsplit("T", 1)[-1] if item.prev_node_time else None
+                ),
+                "last_second_pct": item.last_second_pct,
+                "valid_raise_count": item.valid_raise_count,
+                "previous_open_volume": item.previous_auction_volume,
+                "auction_volume_ratio": item.auction_volume_ratio,
+            }
+            changed = False
+            for key, value in values.items():
+                if value is not None and observation.get(key) is None:
+                    observation[key] = value
+                    changed = True
+            if not changed:
+                return False
+            for key in (
+                "open_price",
+                "last_second_pct",
+                "valid_raise_count",
+                "auction_volume_ratio",
+            ):
+                observation.setdefault(key, None)
+            observation["metric_source"] = "strategy_history"
+            payload["observation"] = observation
+            payload["metrics_updated_at"] = _now()
+            _atomic_json(path, payload)
+            return True
 
     def load_klines(self, symbol: str) -> dict[str, object] | None:
         payload = _read_json(self.kline_path(symbol))
@@ -205,13 +293,27 @@ class LocalStrategyAuctionProvider:
         *,
         require_preopen: bool,
         require_seconds: bool,
+        refresh_provider: object | None = None,
     ) -> None:
         self.store = store
         self.require_preopen = require_preopen
         self.require_seconds = require_seconds
+        self.refresh_provider = refresh_provider
         self.kline_provider = LocalStrategyKlineProvider(store)
 
     def scan(self, symbols: list[str], *, trade_date: str) -> AuctionSnatchScan:
+        for symbol in symbols:
+            self.store.ensure_observation_metrics(trade_date, symbol)
+        refresh_symbols = [
+            symbol
+            for symbol in symbols
+            if not self._supports_requirements(self.store.load_auction(trade_date, symbol))
+        ]
+        if refresh_symbols and self.refresh_provider is not None:
+            try:
+                self.refresh_provider.scan(refresh_symbols, trade_date=trade_date)
+            except Exception:
+                pass
         observations: dict[str, AuctionSnatchObservation] = {}
         problems: list[str] = []
         for symbol in symbols:
@@ -219,26 +321,39 @@ class LocalStrategyAuctionProvider:
             if payload is None:
                 problems.append(f"{symbol}竞价文件缺失")
                 continue
-            resolution = str(payload.get("resolution", "match_only"))
-            if self.require_preopen and payload.get("has_preopen_path") is not True:
+            observation = _observation_from_payload(payload)
+            if self.require_preopen and (
+                observation is None or observation.last_second_pct is None
+            ):
                 problems.append(f"{symbol}只有09:25撮合，缺少09:25前竞价路径")
                 continue
-            if self.require_seconds and resolution != "seconds":
+            if self.require_seconds and (
+                observation is None or observation.valid_raise_count is None
+            ):
                 problems.append(f"{symbol}没有秒级竞价，无法计算有效抬价次数")
                 continue
             if self.store.load_klines(symbol) is None:
                 problems.append(f"{symbol}日K文件缺失")
                 continue
-            observation = _observation_from_payload(payload)
             if observation is None:
                 problems.append(f"{symbol}竞价文件字段不完整")
                 continue
             observations[symbol] = observation
-        if problems:
-            detail = "；".join(problems[:5])
-            suffix = f"；另有 {len(problems) - 5} 项" if len(problems) > 5 else ""
-            raise StrongStockDataUnavailable(f"历史数据不可判定：{detail}{suffix}")
-        return AuctionSnatchScan(observations=observations, attempted=len(symbols))
+        return AuctionSnatchScan(
+            observations=observations,
+            attempted=len(symbols),
+            failed=len(problems),
+        )
+
+    def _supports_requirements(self, payload: dict[str, object] | None) -> bool:
+        if payload is None:
+            return False
+        observation = _observation_from_payload(payload)
+        if observation is None:
+            return False
+        if self.require_preopen and observation.last_second_pct is None:
+            return False
+        return not self.require_seconds or observation.valid_raise_count is not None
 
 
 def strategy_download_dates(
@@ -350,6 +465,7 @@ def run_strategy_raw_download(
                     )
                 else:
                     failures.pop(auction_path, None)
+                    store.ensure_observation_metrics(trade_date, symbol)
                     downloaded_auctions += 1
                 kline_path = f"klines/{symbol}.json"
                 if store.has_kline_coverage(symbol, warmup_start, dates[-1]):
@@ -473,57 +589,74 @@ def _observation_payload(
         "valid_raise_count": observation.valid_raise_count,
         "previous_open_volume": observation.previous_open_volume,
         "auction_volume_ratio": observation.auction_volume_ratio,
+        "metric_source": "live_seconds",
+    }
+
+
+def _match_only_observation_payload(
+    symbol: str,
+    snapshot: dict[str, float | None] | None,
+    *,
+    pre_close_price: float | None,
+    previous_open_volume: float | None,
+) -> dict[str, object] | None:
+    if snapshot is None or snapshot.get("price") in (None, 0):
+        return None
+    open_price = float(snapshot["price"])
+    open_volume = _optional_float(snapshot.get("volume"))
+    return {
+        "symbol": symbol,
+        "open_price": open_price,
+        "open_change_pct": (
+            round((open_price - pre_close_price) / pre_close_price * 100, 4)
+            if pre_close_price not in (None, 0)
+            else None
+        ),
+        "open_volume": open_volume,
+        "open_amount": _optional_float(snapshot.get("trade_amount_yuan")),
+        "previous_price": None,
+        "previous_time": "",
+        "last_second_pct": None,
+        "valid_raise_count": None,
+        "previous_open_volume": previous_open_volume,
+        "auction_volume_ratio": (
+            round(open_volume / previous_open_volume, 4)
+            if open_volume is not None and previous_open_volume not in (None, 0)
+            else None
+        ),
+        "metric_source": "historical_match_only",
     }
 
 
 def _observation_from_payload(payload: dict[str, object]) -> AuctionSnatchObservation | None:
     raw = payload.get("observation")
-    try:
-        resolution = str(payload.get("resolution", "match_only"))
-        if isinstance(raw, dict):
-            return AuctionSnatchObservation(
-                symbol=str(raw["symbol"]),
-                open_price=float(raw["open_price"]),
-                open_change_pct=_optional_float(raw.get("open_change_pct")),
-                open_volume=_optional_float(raw.get("open_volume")),
-                open_amount=_optional_float(raw.get("open_amount")),
-                previous_price=float(raw["previous_price"]),
-                previous_time=str(raw["previous_time"]),
-                last_second_pct=float(raw["last_second_pct"]),
-                valid_raise_count=(
-                    int(raw["valid_raise_count"])
-                    if resolution == "seconds" and raw.get("valid_raise_count") is not None
-                    else None
-                ),
-                previous_open_volume=_optional_float(raw.get("previous_open_volume")),
-                auction_volume_ratio=_optional_float(raw.get("auction_volume_ratio")),
-            )
+    if not isinstance(raw, dict):
         snapshot = payload.get("snapshot_0925")
-        if not isinstance(snapshot, dict):
-            return None
-        open_price = float(snapshot["price"])
-        pre_close = _optional_float(payload.get("pre_close_price"))
-        open_volume = _optional_float(snapshot.get("volume"))
-        previous_volume = _optional_float(payload.get("previous_open_volume"))
+        raw = _match_only_observation_payload(
+            str(payload.get("symbol") or ""),
+            snapshot if isinstance(snapshot, dict) else None,
+            pre_close_price=_optional_float(payload.get("pre_close_price")),
+            previous_open_volume=_optional_float(payload.get("previous_open_volume")),
+        )
+    if raw is None:
+        return None
+    try:
         return AuctionSnatchObservation(
-            symbol=str(payload["symbol"]),
-            open_price=open_price,
-            open_change_pct=(
-                round((open_price - pre_close) / pre_close * 100, 4)
-                if pre_close not in (None, 0)
+            symbol=str(raw["symbol"]),
+            open_price=float(raw["open_price"]),
+            open_change_pct=_optional_float(raw.get("open_change_pct")),
+            open_volume=_optional_float(raw.get("open_volume")),
+            open_amount=_optional_float(raw.get("open_amount")),
+            previous_price=_optional_float(raw.get("previous_price")),
+            previous_time=str(raw.get("previous_time") or ""),
+            last_second_pct=_optional_float(raw.get("last_second_pct")),
+            valid_raise_count=(
+                int(raw["valid_raise_count"])
+                if raw.get("valid_raise_count") is not None
                 else None
             ),
-            open_volume=open_volume,
-            open_amount=_optional_float(snapshot.get("trade_amount_yuan")),
-            previous_price=None,
-            previous_time="",
-            last_second_pct=None,
-            previous_open_volume=previous_volume,
-            auction_volume_ratio=(
-                round(open_volume / previous_volume, 4)
-                if open_volume is not None and previous_volume not in (None, 0)
-                else None
-            ),
+            previous_open_volume=_optional_float(raw.get("previous_open_volume")),
+            auction_volume_ratio=_optional_float(raw.get("auction_volume_ratio")),
         )
     except (KeyError, TypeError, ValueError):
         return None

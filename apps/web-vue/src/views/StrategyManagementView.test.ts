@@ -226,6 +226,24 @@ describe('StrategyManagementView', () => {
     expect(wrapper.text()).toContain('闽东电力');
   });
 
+  it('reruns immediately when an exact condition changes', async () => {
+    api.runStrategy.mockResolvedValue(SNAPSHOT);
+    const wrapper = mountView();
+    await flushPromises();
+    await wrapper.get('.strategy-card').trigger('click');
+    await flushPromises();
+
+    const checkboxes = wrapper.findAll('.exact-filter-option input');
+    await checkboxes[0].setValue(false);
+    await flushPromises();
+
+    expect(api.runStrategy).toHaveBeenLastCalledWith('auction_snatch', '2026-09-18', {
+      limit: 100,
+      exactConditions: [1, 3]
+    });
+    expect(wrapper.text()).toContain('闽东电力');
+  });
+
   it('starts a resumable history download for the active strategy', async () => {
     const warning = [
       '下载完成，有 2 个文件需要注意。',

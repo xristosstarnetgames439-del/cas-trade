@@ -231,6 +231,27 @@ def test_build_auction_snatch_snapshot_strictly_keeps_beijing_culture() -> None:
     assert result.items[0].auction_volume_ratio == 1.8872
 
 
+def test_snapshot_reports_partial_metric_coverage_without_failing() -> None:
+    class PartialProvider(_FakeAuctionProvider):
+        def scan(self, symbols: list[str], *, trade_date: str) -> AuctionSnatchScan:
+            scan = super().scan(symbols, trade_date=trade_date)
+            return AuctionSnatchScan(
+                observations={"000802.SZ": scan.observations["000802.SZ"]},
+                attempted=2,
+                failed=1,
+            )
+
+    result = run(
+        _FakeCandidateProvider(),
+        PartialProvider(),
+        trade_date="2026-08-14",
+    )
+
+    status = result.source_status[-1]
+    assert status.status == "stale"
+    assert status.detail == "逐只核验 2 只，可用数据 1 只，策略命中 1 只，1 只重拉后仍缺所需字段"
+
+
 def test_auction_snatch_excludes_open_gap_below_minus_two() -> None:
     class LowOpenProvider(_FakeAuctionProvider):
         def scan(self, symbols: list[str], *, trade_date: str) -> AuctionSnatchScan:
