@@ -98,6 +98,17 @@ describe('apiRequest', () => {
     );
   });
 
+  it('queries stored strategy rows with selected conditions and bypasses HTTP cache', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () =>
+      new Response(JSON.stringify({ items: [] }), { status: 200 })
+    );
+    await getStrategyRun('auction_snatch', '2026-09-18', [1, 3]);
+    expect(new URL(String(fetchMock.mock.calls[0]?.[0])).searchParams.get('exact_conditions')).toBe('1,3');
+    expect(fetchMock.mock.calls[0]?.[1]?.cache).toBe('no-store');
+    await getStrategyRun('auction_snatch', '2026-09-18', []);
+    expect(new URL(String(fetchMock.mock.calls[1]?.[0])).searchParams.get('exact_conditions')).toBe('');
+  });
+
   it('encodes stock symbols and query parameters', async () => {
     const fetchMock = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
       new Response(JSON.stringify({}), { status: 200 })

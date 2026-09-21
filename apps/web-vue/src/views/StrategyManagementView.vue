@@ -20,6 +20,7 @@ import type {
   StrategyRawPeriod
 } from '@/service/types';
 import { useTradeDate } from '@/composables/useTradeDate';
+import { exactConditionsKey } from '@/utils/domain/strategyExactFilter';
 import { formatWorkbenchNumber } from '@/components/common/workbench/workbench';
 
 defineOptions({ name: 'StrategyManagementView' });
@@ -30,11 +31,15 @@ const strategies = ref<StrategyDefinition[]>([]);
 const activeStrategy = ref<StrategyDefinition | null>(null);
 const result = ref<AuctionSnapshotResponse | null>(null);
 const loading = ref(false);
+const viewing = ref(false);
+const refreshRevision = ref(0);
+const refreshMessage = ref('');
 const error = ref<string | null>(null);
 const createOpen = ref(false);
 const creating = ref(false);
 const selectedExactFilterSlots = ref<number[]>([]);
 const storedRun = ref<AuctionSnapshotResponse | null>(null);
+const viewedExactKey = ref<string | null>(null);
 const downloadOpen = ref(false);
 const downloadPeriod = ref<StrategyRawPeriod>('month');
 const downloadJob = ref<BackgroundJobState | null>(null);
@@ -42,6 +47,11 @@ const downloadError = ref<string | null>(null);
 const downloadWarningClosed = ref(false);
 let downloadPollTimer: ReturnType<typeof setTimeout> | null = null;
 const hasStoredRun = computed(() => storedRun.value !== null);
+const filtersChanged = computed(() => result.value !== null
+  && viewedExactKey.value !== exactConditionsKey(selectedExactFilterSlots.value));
+const dataWarnings = computed(() => result.value?.source_status
+  .filter(source => source.status === 'stale' || source.status === 'failed')
+  .map(source => source.detail).filter(Boolean).join('；') ?? '');
 const downloadRunning = computed(() => downloadJob.value?.status === 'pending' || downloadJob.value?.status === 'running');
 const downloadWarning = computed(() => {
   const jobResult = downloadJob.value?.result;
@@ -56,6 +66,7 @@ const downloadProgress = computed(() => {
   return total > 0 ? Math.round((current / total) * 100) : 0;
 });
 let probeSeq = 0;
+let requestSeq = 0;
 const form = reactive<StrategyCreateRequest>({
   title: '',
   description: '',
@@ -85,36 +96,54 @@ async function loadStrategies() {
 }
 
 async function execute() {
-  if (!activeStrategy.value) return;
-  const strategyId = activeStrategy.value.id;
-  const date = tradeDate.value;
-  loading.value = true;
-  error.value = null;
-  result.value = null;
-  try {
-    const snapshot = await runStrategy(strategyId, date, {
-      limit: 100,
-      exactConditions: selectedExactFilterSlots.value
-    });
-    if (activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
-    result.value = snapshot;
-    storedRun.value = snapshot;
-    probeSeq += 1;
-  } catch (cause) {
-    if (activeStrategy.value?.id !== strategyId || tradeDate.value !== date) return;
-    result.value = null;
-    error.value = cause instanceof Error ? cause.message : '执行策略失败';
-  } finally {
-    if (activeStrategy.value?.id === strategyId && tradeDate.value === date) {
-      loading.value = false;
-    }
-  }
+  await refreshResults(true);
 }
 
-function viewStored() {
-  if (!storedRun.value) return;
+async function viewStored() {
+  await refreshResults(false);
+}
+
+async function refreshResults(run: boolean) {
+  if (!activeStrategy.value || loading.value) return;
+  const strategyId = activeStrategy.value.id;
+  const date = tradeDate.value;
+  const selected = [...selectedExactFilterSlots.value];
+  requestSeq += 1;
+  const seq = requestSeq;
+  probeSeq += 1;
+  loading.value = true;
+  viewing.value = !run;
   error.value = null;
-  result.value = storedRun.value;
+  result.value = null;
+  refreshMessage.value = run ? '正在采集全部候选及指标并保存…' : '正在按当前条件查询本地数据库…';
+  try {
+    if (run) {
+      const pool = await runStrategy(strategyId, date);
+      if (seq !== requestSeq) return;
+      storedRun.value = pool;
+    }
+    const snapshot = await getStrategyRun(strategyId, date, selected);
+    if (seq !== requestSeq) return;
+    if (!snapshot) {
+      storedRun.value = null;
+      throw new Error('暂无该日完整候选池，请先点击运行筛选；旧版筛选记录需要重新运行一次。');
+    }
+    result.value = snapshot;
+    viewedExactKey.value = exactConditionsKey(selected);
+    refreshRevision.value += 1;
+    refreshMessage.value = `${run ? '候选已入库，' : ''}已按 ${selected.length} 项精确条件刷新，命中 ${snapshot.items.length} 只 · ${dayjs().format('HH:mm:ss')}`;
+  } catch (cause) {
+    if (seq !== requestSeq) return;
+    result.value = null;
+    refreshMessage.value = '';
+    const fallback = run ? '执行策略失败' : '查看筛选失败';
+    error.value = cause instanceof Error ? cause.message : fallback;
+  } finally {
+    if (seq === requestSeq) {
+      loading.value = false;
+      viewing.value = false;
+    }
+  }
 }
 
 async function probeStored() {
@@ -127,7 +156,7 @@ async function probeStored() {
   const seq = probeSeq;
   const date = tradeDate.value;
   try {
-    const snapshot = await getStrategyRun(strategy.id, date);
+    const snapshot = await getStrategyRun(strategy.id, date, []);
     if (seq !== probeSeq) return;
     storedRun.value = snapshot;
   } catch {
@@ -140,6 +169,7 @@ function selectStrategy(item: StrategyDefinition) {
   activeStrategy.value = item;
   result.value = null;
   storedRun.value = null;
+  viewedExactKey.value = null;
   error.value = null;
   resetExactFilter();
 }
@@ -148,6 +178,7 @@ function backToStrategies() {
   activeStrategy.value = null;
   result.value = null;
   storedRun.value = null;
+  viewedExactKey.value = null;
   error.value = null;
 }
 
@@ -194,9 +225,19 @@ function selectAllExactFilters() {
 function handleDateChange(value: string) {
   setTradeDate(value);
   result.value = null;
+  viewedExactKey.value = null;
 }
 
 watch([tradeDate, activeStrategy], () => {
+  requestSeq += 1;
+  probeSeq += 1;
+  loading.value = false;
+  viewing.value = false;
+  storedRun.value = null;
+  result.value = null;
+  error.value = null;
+  viewedExactKey.value = null;
+  refreshMessage.value = '';
   probeStored();
 });
 
@@ -319,7 +360,7 @@ onUnmounted(stopDownloadPoll);
     <section v-else class="strategy-detail border border-border rounded-6px bg-container p-12px">
       <a-alert
         class="mb-10px"
-        message="历史策略只读取本地文件；勾选有效抬价时必须有秒级竞价，未勾选时可继续使用 09:25 价量和日 K 条件筛选。"
+        message="运行筛选：采集当日全部基础候选及精确条件指标并入库。查看筛选：按勾选条件查询本地数据库；修改勾选后请点击查看筛选。历史秒级竞价缺失时，相关指标无法补回。"
         show-icon
         type="info"
       />
@@ -353,13 +394,14 @@ onUnmounted(stopDownloadPoll);
         <span v-if="result?.generated_at" class="strategy-updated">
           更新 {{ dayjs(result.generated_at).format('HH:mm:ss') }}
         </span>
-        <a-button data-testid="strategy-run-button" type="primary" :loading="loading" @click="execute">
+        <a-button data-testid="strategy-run-button" type="primary" :loading="loading && !viewing" :disabled="loading" @click="execute">
           运行筛选
         </a-button>
         <a-button
           data-testid="strategy-view-button"
           :type="hasStoredRun ? 'primary' : 'default'"
           :disabled="!hasStoredRun || loading"
+          :loading="viewing"
           @click="viewStored"
         >
           查看筛选
@@ -376,19 +418,20 @@ onUnmounted(stopDownloadPoll);
       </details>
 
       <details class="strategy-disclosure">
-        <summary>精确筛选（{{ selectedExactFilterSlots.length }}/{{ exactFilterOptions.length }}）</summary>
+        <summary>精确筛选（{{ selectedExactFilterSlots.length }}/{{ exactFilterOptions.length }}，查看筛选按勾选过滤）</summary>
         <div class="exact-filter-scroll">
           <label
             v-for="(condition, index) in exactFilterOptions"
             :key="`${index}-${condition.label}`"
             class="exact-filter-option"
           >
-            <input v-model="selectedExactFilterSlots" type="checkbox" :value="index" />
+            <input v-model="selectedExactFilterSlots" type="checkbox" :value="index" :disabled="loading" />
             <span>{{ condition.label }}</span>
           </label>
           <a-button
             v-if="selectedExactFilterSlots.length !== exactFilterOptions.length"
             size="small"
+            :disabled="loading"
             @click="selectAllExactFilters"
           >
             全选
@@ -396,10 +439,16 @@ onUnmounted(stopDownloadPoll);
         </div>
       </details>
 
+      <p v-if="filtersChanged" class="text-primary" role="status">条件已变更，点击「查看筛选」刷新结果</p>
+      <p v-if="refreshMessage" :key="refreshRevision" class="refresh-feedback" role="status">{{ refreshMessage }}</p>
+      <a-alert v-if="dataWarnings" :message="dataWarnings" type="warning" show-icon />
+      <p v-if="!hasStoredRun && !loading" class="text-text-secondary">暂无该日完整候选池，请先运行筛选（旧版记录需重新运行一次）。</p>
       <div v-if="result" class="mb-8px mt-12px text-12px text-text-secondary">
         策略命中 {{ result.items.length }} 只
       </div>
       <DataList
+        :key="refreshRevision"
+        class="strategy-results"
         :items="result?.items ?? []"
         :loading="loading"
         :error="error"
@@ -473,6 +522,26 @@ onUnmounted(stopDownloadPoll);
 </template>
 
 <style scoped>
+.refresh-feedback {
+  padding: 8px 12px;
+  border-radius: 6px;
+  color: #1677ff;
+  background: rgba(22, 119, 255, 0.08);
+}
+
+.strategy-results {
+  animation: results-refresh 650ms ease-out;
+}
+
+@keyframes results-refresh {
+  from { background-color: rgba(22, 119, 255, 0.15); }
+  to { background-color: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .strategy-results { animation: none; }
+}
+
 .strategy-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));

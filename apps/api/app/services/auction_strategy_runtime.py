@@ -9,6 +9,7 @@ from app.models import (
     AuctionSnapshotMetrics,
     AuctionSnapshotResponse,
     StrongStockCandidate,
+    StrongStockDataUnavailable,
     StrongStockSourceStatus,
 )
 from app.services.auction_snatch import (
@@ -38,7 +39,7 @@ def run_auction_rules(
     auction_provider: AuctionSnatchProvider,
     *,
     trade_date: str,
-    limit: int = 100,
+    limit: int | None = 100,
     exact_conditions: list[int] | None = None,
     exact_matcher: ExactMatcher | None = None,
     kline_provider: object | None = None,
@@ -61,6 +62,8 @@ def run_auction_rules(
         [candidate.symbol for candidate in candidates],
         trade_date=trade_date,
     )
+    if candidates and not scan.observations:
+        raise StrongStockDataUnavailable("未取得任何可用竞价数据，本次未覆盖已保存的候选池，请稍后重试")
     configured_exact = dict(strategy.get("exact_conditions") or {}).get("data") or []
     selected_exact = (
         {
@@ -88,7 +91,8 @@ def run_auction_rules(
     items.sort(
         key=lambda item: _sort_key(item, str(rules.get("sort_by", "days_boards"))), reverse=True
     )
-    items = items[: max(1, min(limit, 100))]
+    if limit is not None:
+        items = items[: max(1, min(limit, 100))]
     return AuctionSnapshotResponse(
         trade_date=trade_date,
         session="closed",
@@ -121,6 +125,21 @@ def run_auction_rules(
                     + (f"，{scan.failed} 只重拉后仍缺所需字段" if scan.failed else "")
                 ),
             ),
+            *([
+                StrongStockSourceStatus(
+                    source="竞价指标完整性",
+                    status="stale",
+                    detail=(
+                        f"候选中 {sum(item.valid_raise_count is None for item in items)} 只缺抬价次数，"
+                        f"{sum(item.last_second_pct is None for item in items)} 只缺末尾抬价幅度，"
+                        f"{sum(item.auction_volume_ratio is None for item in items)} 只缺竞价量比；"
+                        "已保留可用字段，勾选对应精确条件时不能判定的股票会被排除"
+                    ),
+                )
+            ] if any(
+                item.valid_raise_count is None or item.last_second_pct is None
+                or item.auction_volume_ratio is None for item in items
+            ) else []),
         ],
     )
 

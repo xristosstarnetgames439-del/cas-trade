@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.models import StrongStockCandidate
-from app.routers.strategies import _parse_exact_conditions
+from app.models import StrongStockCandidate, StrongStockDataUnavailable
+from app.routers.strategies import _parse_exact_conditions, get_strategy_run
 from app.services.auction_snatch import (
     AuctionSnatchObservation,
     AuctionSnatchScan,
@@ -170,3 +170,58 @@ def test_parse_exact_conditions_distinguishes_default_and_empty_selection() -> N
     assert _parse_exact_conditions(None) is None
     assert _parse_exact_conditions("") == []
     assert _parse_exact_conditions("0,2,2") == [0, 2]
+
+
+def test_full_pool_survives_more_than_100_items_and_views_only_read_database(tmp_path, monkeypatch):
+    class Candidates:
+        source_name = "测试涨停池"
+
+        def get_candidates(self, trade_date):
+            return [StrongStockCandidate(
+                symbol=f"{600000 + index}.SH", name=f"测试股票{index}", board_note="涨停日期: 20260813"
+            ) for index in range(105)]
+
+    class Auctions:
+        source_name = "测试竞价"
+        calls = 0
+
+        def scan(self, symbols, *, trade_date):
+            self.calls += 1
+            return AuctionSnatchScan(attempted=len(symbols), observations={
+                symbol: AuctionSnatchObservation(
+                    symbol=symbol, open_price=10, open_change_pct=2, open_volume=200,
+                    open_amount=2000, previous_price=9.9, previous_time="09:24:57",
+                    last_second_pct=1, valid_raise_count=3 if index < 2 else None,
+                    auction_volume_ratio=0.7 if index == 0 else 1.2,
+                ) for index, symbol in enumerate(symbols)
+            })
+
+    manager = StrategyManager()
+    auctions = Auctions()
+    snapshot = manager.run(
+        "auction_snatch", Candidates(), auctions, trade_date="2026-08-14",
+        data_dir=tmp_path, limit=1, exact_conditions=[0, 1, 3], collect_all=True,
+    )
+    assert len(snapshot.items) == 105
+    store = StrategyHistoryStore(tmp_path)
+    assert len(store.load_latest("auction_snatch", "2026-08-14", full_pool_only=True).items) == 105
+    monkeypatch.setattr("app.routers.strategies._strategy_data_dir", lambda: tmp_path)
+    strict = get_strategy_run("auction_snatch", "2026-08-14", "0,1,3")
+    assert len(strict["items"]) == 2
+    relaxed = get_strategy_run("auction_snatch", "2026-08-14", "1,3")
+    assert len(relaxed["items"]) == 105
+    higher_volume = get_strategy_run("auction_snatch", "2026-08-14", "0,2")
+    assert [item["symbol"] for item in higher_volume["items"]] == ["600001.SH"]
+    assert len(get_strategy_run("auction_snatch", "2026-08-14", "")["items"]) == 105
+    assert auctions.calls == 1
+    with store._connect() as connection:
+        assert connection.execute("SELECT COUNT(*) FROM strategy_runs").fetchone()[0] == 1
+
+    class Unavailable:
+        def scan(self, symbols, *, trade_date):
+            return AuctionSnatchScan(attempted=len(symbols), failed=len(symbols), observations={})
+
+    with pytest.raises(StrongStockDataUnavailable, match="未覆盖"):
+        manager.run("auction_snatch", Candidates(), Unavailable(), trade_date="2026-08-14",
+                    data_dir=tmp_path, collect_all=True)
+    assert len(get_strategy_run("auction_snatch", "2026-08-14", "")["items"]) == 105

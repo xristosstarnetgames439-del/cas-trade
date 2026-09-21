@@ -6,7 +6,7 @@ import re
 from pathlib import Path
 from types import ModuleType
 
-from app.models import AuctionSnapshotResponse
+from app.models import AuctionSnapshotMetrics, AuctionSnapshotResponse, StrongStockSourceStatus
 from app.services.auction_snatch import AuctionSnatchProvider
 from app.services.strategy_history_store import StrategyHistoryStore
 from app.services.strategy_result_store import StrategyResultStore
@@ -88,9 +88,13 @@ class StrategyManager:
         limit: int = 100,
         refresh: bool = False,
         exact_conditions: list[int] | None = None,
+        collect_all: bool = False,
     ) -> AuctionSnapshotResponse:
         path = self._path(strategy_id)
         module, metadata = self._load(path)
+        if collect_all:
+            # 运行阶段只应用基础条件，完整采集全部精确条件需要的字段。
+            exact_conditions = []
         configured_exact = dict(metadata.get("exact_conditions") or {}).get("data") or []
         if exact_conditions is not None and any(
             index >= len(configured_exact) for index in exact_conditions
@@ -110,7 +114,7 @@ class StrategyManager:
             candidate_provider,
             auction_provider,
             trade_date=trade_date,
-            limit=limit,
+            limit=None if collect_all else limit,
             exact_conditions=exact_conditions,
         )
         if exact_conditions is None:
@@ -120,8 +124,52 @@ class StrategyManager:
             strategy_version=version,
             snapshot=result,
             exact_conditions=exact_conditions,
+            is_full_pool=collect_all,
         )
         return result
+
+    def view(
+        self,
+        strategy_id: str,
+        *,
+        trade_date: str,
+        data_dir: Path,
+        exact_conditions: list[int] | None = None,
+    ) -> AuctionSnapshotResponse | None:
+        """仅从本地数据库读取完整候选，复用策略文件的精确条件；不访问行情源。"""
+        module, metadata = self._load(self._path(strategy_id))
+        configured = metadata["exact_conditions"]["data"]
+        selected = (
+            {index for index, condition in enumerate(configured) if condition["isselect"]}
+            if exact_conditions is None
+            else set(exact_conditions)
+        )
+        if any(index < 0 or index >= len(configured) for index in selected):
+            raise ValueError("精确筛选条件不存在")
+        matcher = getattr(module, "_matches_exact", None)
+        if selected and not callable(matcher):
+            raise ValueError("策略文件尚未实现精确筛选函数 _matches_exact")
+        snapshot = StrategyHistoryStore(data_dir).load_latest(
+            strategy_id, trade_date, full_pool_only=True
+        )
+        if snapshot is None:
+            return None
+        items = [item for item in snapshot.items if not selected or matcher(item, selected)]
+        status = StrongStockSourceStatus(
+            source="本地策略数据库",
+            status="success",
+            detail=f"候选池 {len(snapshot.items)} 只，按 {len(selected)} 项精确条件筛选，命中 {len(items)} 只",
+        )
+        return snapshot.model_copy(update={
+            "items": items,
+            "metrics": AuctionSnapshotMetrics(
+                candidate_count=len(items),
+                strong_high_open_count=sum(1 for item in items if (item.open_gap_pct or 0) >= 3),
+                high_risk_count=sum(1 for item in items if item.tier == "high_risk"),
+                total_turnover_cny=round(sum(item.turnover_cny or 0 for item in items), 2),
+            ),
+            "source_status": [*snapshot.source_status, status],
+        }, deep=True)
 
     def _path(self, strategy_id: str) -> Path:
         if not _STRATEGY_ID_PATTERN.fullmatch(strategy_id):

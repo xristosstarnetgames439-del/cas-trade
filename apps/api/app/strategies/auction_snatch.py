@@ -54,7 +54,7 @@ def run(
     auction_provider: AuctionSnatchProvider,
     *,
     trade_date: str,
-    limit: int = 100,
+    limit: int | None = 100,
     exact_conditions: list[int] | None = None,
 ) -> AuctionSnapshotResponse:
     return run_auction_rules(

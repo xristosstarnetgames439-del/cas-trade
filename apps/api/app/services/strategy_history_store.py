@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS strategy_runs (
   exact_conditions_json TEXT,
   item_count INTEGER NOT NULL,
   is_latest INTEGER NOT NULL,
+  is_full_pool INTEGER NOT NULL DEFAULT 0,
   payload_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS strategy_runs_latest_idx
@@ -58,6 +59,7 @@ class StrategyHistoryStore:
         strategy_version: int,
         snapshot: AuctionSnapshotResponse,
         exact_conditions: list[int] | None,
+        is_full_pool: bool = False,
     ) -> None:
         if not snapshot.trade_date:
             return
@@ -77,8 +79,8 @@ class StrategyHistoryStore:
                 """
                 INSERT INTO strategy_runs (
                   run_id, strategy_id, strategy_version, trade_date, generated_at,
-                  exact_conditions_json, item_count, is_latest, payload_json
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?)
+                  exact_conditions_json, item_count, is_latest, payload_json, is_full_pool
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
                 """,
                 (
                     run_id,
@@ -89,6 +91,7 @@ class StrategyHistoryStore:
                     json.dumps(exact_conditions, ensure_ascii=False),
                     len(snapshot.items),
                     payload,
+                    int(is_full_pool),
                 ),
             )
             connection.executemany(
@@ -101,14 +104,22 @@ class StrategyHistoryStore:
                 [_item_row(run_id, rank, item) for rank, item in enumerate(snapshot.items, start=1)],
             )
 
-    def load_latest(self, strategy_id: str, trade_date: str) -> AuctionSnapshotResponse | None:
+    def load_latest(
+        self, strategy_id: str, trade_date: str, *, full_pool_only: bool = False
+    ) -> AuctionSnapshotResponse | None:
         with self._connect() as connection:
             row = connection.execute(
                 """
                 SELECT payload_json FROM strategy_runs
-                WHERE strategy_id = ? AND trade_date = ? AND is_latest = 1
+                WHERE strategy_id = ? AND trade_date = ? AND (? = 0 OR is_full_pool = 1)
+                ORDER BY
+                  is_full_pool DESC,
+                  CASE exact_conditions_json WHEN '[]' THEN 0 ELSE 1 END,
+                  is_latest DESC,
+                  generated_at DESC, rowid DESC
+                LIMIT 1
                 """,
-                (strategy_id, trade_date),
+                (strategy_id, trade_date, int(full_pool_only)),
             ).fetchone()
         if row is None:
             return None
@@ -153,6 +164,12 @@ class StrategyHistoryStore:
     def _ensure_schema(self) -> None:
         with self._connect() as connection:
             connection.executescript(_SCHEMA)
+            columns = {row["name"] for row in connection.execute("PRAGMA table_info(strategy_runs)")}
+            if "is_full_pool" not in columns:
+                # 旧记录可能已按精确条件或 100 条上限裁剪，不能当作完整候选池。
+                connection.execute(
+                    "ALTER TABLE strategy_runs ADD COLUMN is_full_pool INTEGER NOT NULL DEFAULT 0"
+                )
 
     def _connect(self) -> sqlite3.Connection:
         self.path.parent.mkdir(parents=True, exist_ok=True)

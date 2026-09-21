@@ -265,6 +265,13 @@ def test_local_history_refreshes_missing_metrics_and_skips_unavailable_symbols(
     assert scan.observations["000802.SZ"].valid_raise_count == 4
     assert scan.failed == 1
 
+    partial = LocalStrategyAuctionProvider(
+        store, require_preopen=True, require_seconds=True,
+        refresh_provider=refresh, keep_partial=True,
+    ).scan(["000802.SZ", "600001.SH"], trade_date=trade_date)
+    assert set(partial.observations) == {"000802.SZ", "600001.SH"}
+    assert partial.observations["600001.SH"].valid_raise_count is None
+
 
 def test_local_candidates_only_use_previous_sessions(tmp_path) -> None:
     store = StrategyRawStore(tmp_path)

@@ -312,10 +312,14 @@ export async function runStrategy(
 
 export async function getStrategyRun(
   strategyId: string,
-  tradeDate: string
+  tradeDate: string,
+  exactConditions?: number[]
 ): Promise<AuctionSnapshotResponse | null> {
+  const params = new URLSearchParams();
+  if (exactConditions !== undefined) params.set('exact_conditions', exactConditions.join(','));
   const response = await apiFetch(
-    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/runs/${encodeURIComponent(tradeDate)}`
+    `${API_BASE_URL}/api/strategies/${encodeURIComponent(strategyId)}/runs/${encodeURIComponent(tradeDate)}?${params}`,
+    { cache: 'no-store' }
   );
   if (response.status === 404) return null;
   if (!response.ok) {

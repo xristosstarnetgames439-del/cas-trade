@@ -69,7 +69,7 @@ def run_strategy(
         datetime.strptime(trade_date, "%Y-%m-%d")
         if date.fromisoformat(trade_date) > local_date():
             raise ValueError("不能运行未来交易日的策略")
-        selected_exact = _parse_exact_conditions(exact_conditions)
+        _parse_exact_conditions(exact_conditions)
         manager = StrategyManager()
         metadata = manager.definition(strategy_id)
         data_dir = _strategy_data_dir()
@@ -77,7 +77,7 @@ def run_strategy(
         if historical:
             rules = dict(metadata.get("rules") or {})
             lookback_days = max(1, int(rules.get("recent_limit_up_days", 3)))
-            required = _selected_requirements(metadata, selected_exact)
+            required = _all_configured_requirements(metadata)
             raw_store = StrategyRawStore(data_dir)
             for item in StrategyHistoryStore(data_dir).load_auction_metrics(
                 strategy_id, trade_date
@@ -94,6 +94,7 @@ def run_strategy(
                     workers=4,
                     archive_store=raw_store,
                 ),
+                keep_partial=True,
             )
         else:
             candidate_provider = _candidate_provider()
@@ -108,7 +109,9 @@ def run_strategy(
             data_dir=data_dir,
             limit=max(1, min(limit, 100)),
             refresh=refresh,
-            exact_conditions=selected_exact,
+            exact_conditions=[],
+            # 运行入库不受查看条件或旧版 limit 参数截断；查看接口单独过滤。
+            collect_all=True,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -120,17 +123,24 @@ def run_strategy(
 
 
 @router.get("/api/strategies/{strategy_id}/runs/{trade_date}")
-def get_strategy_run(strategy_id: str, trade_date: str) -> dict[str, object]:
+def get_strategy_run(
+    strategy_id: str, trade_date: str, exact_conditions: str | None = None
+) -> dict[str, object]:
     try:
         datetime.strptime(trade_date, "%Y-%m-%d")
-        StrategyManager()._path(strategy_id)
+        # 查看只查 SQLite，不触发下载/行情重拉，也不保存新的运行记录。
+        stored = StrategyManager().view(
+            strategy_id,
+            trade_date=trade_date,
+            data_dir=_strategy_data_dir(),
+            exact_conditions=_parse_exact_conditions(exact_conditions),
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail="策略不存在") from exc
-    stored = StrategyHistoryStore(_strategy_data_dir()).load_latest(strategy_id, trade_date)
     if stored is None:
-        raise HTTPException(status_code=404, detail="暂无该日筛选记录")
+        raise HTTPException(status_code=404, detail="暂无该日完整候选池，请先点击运行筛选")
     return stored.model_dump(mode="json")
 
 
@@ -215,25 +225,12 @@ def cancel_strategy_raw_download(strategy_id: str, job_id: str) -> dict[str, obj
     return canceled.model_dump(mode="json")
 
 
-def _selected_requirements(
-    metadata: dict[str, object], selected_exact: list[int] | None
-) -> set[str]:
+def _all_configured_requirements(metadata: dict[str, object]) -> set[str]:
     configured = dict(metadata.get("exact_conditions") or {}).get("data") or []
-    selected = (
-        {
-            index
-            for index, condition in enumerate(configured)
-            if isinstance(condition, dict) and condition.get("isselect") is True
-        }
-        if selected_exact is None
-        else set(selected_exact)
-    )
     return {
         str(condition["requires"])
-        for index, condition in enumerate(configured)
-        if index in selected
-        and isinstance(condition, dict)
-        and isinstance(condition.get("requires"), str)
+        for condition in configured
+        if isinstance(condition, dict) and isinstance(condition.get("requires"), str)
     }
 
 

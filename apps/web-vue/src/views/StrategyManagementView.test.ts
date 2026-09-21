@@ -88,11 +88,30 @@ const SNAPSHOT: AuctionSnapshotResponse = {
       prev_node_price: 17.8,
       prev_node_time: '2026-09-18T09:24:57',
       limit_up_3d: true,
+      valid_raise_count: 3,
+      limit_up_break_days: 1,
+      auction_volume_ratio: 0.7,
       close_price: 18.3
     }
   ],
   source_status: [],
   generated_at: '2026-09-18T15:05:00+08:00'
+};
+
+const FULL_SNAPSHOT: AuctionSnapshotResponse = {
+  ...SNAPSHOT,
+  metrics: { ...SNAPSHOT.metrics, candidate_count: 2 },
+  items: [
+    SNAPSHOT.items[0],
+    {
+      ...SNAPSHOT.items[0],
+      symbol: '600001.SH',
+      name: '高量股',
+      valid_raise_count: 2,
+      limit_up_break_days: 0,
+      auction_volume_ratio: 1.2
+    }
+  ]
 };
 
 const ButtonStub = defineComponent({
@@ -173,9 +192,10 @@ describe('StrategyManagementView', () => {
 
     const viewButton = wrapper.get('[data-testid="strategy-view-button"]');
     expect(viewButton.attributes('disabled')).toBeDefined();
-    expect(api.getStrategyRun).toHaveBeenCalledWith('auction_snatch', '2026-09-18');
+    expect(api.getStrategyRun).toHaveBeenCalledWith('auction_snatch', '2026-09-18', []);
 
     api.runStrategy.mockResolvedValue(SNAPSHOT);
+    api.getStrategyRun.mockResolvedValue(SNAPSHOT);
     await wrapper.get('[data-testid="strategy-run-button"]').trigger('click');
     await flushPromises();
 
@@ -194,6 +214,7 @@ describe('StrategyManagementView', () => {
 
     expect(wrapper.text()).toContain('点击运行筛选查看结果');
     await wrapper.get('[data-testid="strategy-view-button"]').trigger('click');
+    await flushPromises();
 
     expect(api.runStrategy).not.toHaveBeenCalled();
     expect(wrapper.text()).toContain('闽东电力');
@@ -214,6 +235,7 @@ describe('StrategyManagementView', () => {
     await wrapper.get('.strategy-card').trigger('click');
     await flushPromises();
     await wrapper.get('[data-testid="strategy-view-button"]').trigger('click');
+    await flushPromises();
     expect(wrapper.text()).toContain('闽东电力');
 
     await wrapper.get('[data-testid="strategy-run-button"]').trigger('click');
@@ -226,32 +248,50 @@ describe('StrategyManagementView', () => {
     expect(wrapper.text()).toContain('闽东电力');
   });
 
-  it('waits for the run button after exact conditions change', async () => {
-    api.runStrategy.mockResolvedValue(SNAPSHOT);
+  it('collects once then queries the database on manual view with visible refresh feedback', async () => {
+    api.runStrategy.mockResolvedValue(FULL_SNAPSHOT);
     const wrapper = mountView();
     await flushPromises();
     await wrapper.get('.strategy-card').trigger('click');
     await flushPromises();
 
-    const checkboxes = wrapper.findAll('.exact-filter-option input');
-    await checkboxes[0].setValue(false);
-    await flushPromises();
-
-    expect(api.runStrategy).not.toHaveBeenCalled();
-
-    await wrapper.get('.exact-filter-scroll button').trigger('click');
-    await flushPromises();
-    expect(api.runStrategy).not.toHaveBeenCalled();
-
-    await checkboxes[0].setValue(false);
+    api.getStrategyRun.mockResolvedValue(SNAPSHOT);
     await wrapper.get('[data-testid="strategy-run-button"]').trigger('click');
     await flushPromises();
 
-    expect(api.runStrategy).toHaveBeenLastCalledWith('auction_snatch', '2026-09-18', {
-      limit: 100,
-      exactConditions: [1, 2, 3]
-    });
+    expect(api.runStrategy).toHaveBeenLastCalledWith('auction_snatch', '2026-09-18');
+    expect(api.getStrategyRun).toHaveBeenLastCalledWith('auction_snatch', '2026-09-18', [0, 1, 3]);
     expect(wrapper.text()).toContain('闽东电力');
+    expect(wrapper.text()).not.toContain('高量股');
+
+    const checkboxes = wrapper.findAll('.exact-filter-option input');
+    const queryCount = api.getStrategyRun.mock.calls.length;
+    await checkboxes[0].setValue(false);
+    await flushPromises();
+    expect(wrapper.text()).not.toContain('高量股');
+    expect(wrapper.text()).toContain('条件已变更');
+    expect(api.getStrategyRun).toHaveBeenCalledTimes(queryCount);
+
+    let finishView: ((value: AuctionSnapshotResponse) => void) | undefined;
+    api.getStrategyRun.mockImplementationOnce(() => new Promise(resolve => { finishView = resolve; }));
+    await wrapper.get('[data-testid="strategy-view-button"]').trigger('click');
+    expect(wrapper.text()).toContain('正在按当前条件查询本地数据库');
+    expect(wrapper.get('[data-testid="strategy-view-button"]').attributes('disabled')).toBeDefined();
+    finishView?.(FULL_SNAPSHOT);
+    await flushPromises();
+    expect(api.getStrategyRun).toHaveBeenLastCalledWith('auction_snatch', '2026-09-18', [1, 3]);
+    expect(api.runStrategy).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain('闽东电力');
+    expect(wrapper.text()).toContain('高量股');
+    expect(wrapper.text()).toContain('已按 2 项精确条件刷新，命中 2 只');
+
+    api.getStrategyRun.mockResolvedValue(FULL_SNAPSHOT);
+    await wrapper.get('[data-testid="strategy-view-button"]').trigger('click');
+    await flushPromises();
+    expect(wrapper.text()).toContain('高量股');
+    await wrapper.get('.exact-filter-scroll button').trigger('click');
+    expect(api.runStrategy).toHaveBeenCalledTimes(1);
+    expect(wrapper.text()).toContain('条件已变更');
   });
 
   it('starts a resumable history download for the active strategy', async () => {

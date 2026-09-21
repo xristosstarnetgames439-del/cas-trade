@@ -294,11 +294,13 @@ class LocalStrategyAuctionProvider:
         require_preopen: bool,
         require_seconds: bool,
         refresh_provider: object | None = None,
+        keep_partial: bool = False,
     ) -> None:
         self.store = store
         self.require_preopen = require_preopen
         self.require_seconds = require_seconds
         self.refresh_provider = refresh_provider
+        self.keep_partial = keep_partial
         self.kline_provider = LocalStrategyKlineProvider(store)
 
     def scan(self, symbols: list[str], *, trade_date: str) -> AuctionSnatchScan:
@@ -326,12 +328,14 @@ class LocalStrategyAuctionProvider:
                 observation is None or observation.last_second_pct is None
             ):
                 problems.append(f"{symbol}只有09:25撮合，缺少09:25前竞价路径")
-                continue
-            if self.require_seconds and (
+                if not self.keep_partial:
+                    continue
+            elif self.require_seconds and (
                 observation is None or observation.valid_raise_count is None
             ):
                 problems.append(f"{symbol}没有秒级竞价，无法计算有效抬价次数")
-                continue
+                if not self.keep_partial:
+                    continue
             if self.store.load_klines(symbol) is None:
                 problems.append(f"{symbol}日K文件缺失")
                 continue
@@ -352,6 +356,8 @@ class LocalStrategyAuctionProvider:
         if observation is None:
             return False
         if self.require_preopen and observation.last_second_pct is None:
+            return False
+        if self.keep_partial and observation.auction_volume_ratio is None:
             return False
         return not self.require_seconds or observation.valid_raise_count is not None
 
